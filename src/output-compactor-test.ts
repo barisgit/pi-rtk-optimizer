@@ -117,4 +117,42 @@ runTest("short read output stays exact below threshold", () => {
 	assert.deepEqual(result.techniques, []);
 });
 
+runTest("read output stays exact at the 80-line boundary with trailing newline", () => {
+	const config = cloneConfig();
+	config.outputCompaction.smartTruncate.enabled = true;
+	config.outputCompaction.smartTruncate.maxLines = 40;
+
+	const content = buildReadContent(80);
+	const result = compactToolResult(
+		{
+			toolName: "read",
+			input: { path: "sample.ts" },
+			content: [{ type: "text", text: content }],
+		},
+		config,
+	);
+
+	assert.equal(result.changed, false);
+	assert.deepEqual(result.techniques, []);
+});
+
+runTest("read output compacts once the content exceeds the 80-line exactness threshold", () => {
+	const config = cloneConfig();
+	config.outputCompaction.smartTruncate.enabled = true;
+	config.outputCompaction.smartTruncate.maxLines = 40;
+
+	const content = buildReadContent(81);
+	const result = compactToolResult(
+		{
+			toolName: "read",
+			input: { path: "sample.ts" },
+			content: [{ type: "text", text: content }],
+		},
+		config,
+	);
+
+	assert.equal(result.changed, true);
+	assert.ok(result.techniques.includes("source:minimal") || result.techniques.includes("smart-truncate"));
+});
+
 console.log("All output-compactor tests passed.");

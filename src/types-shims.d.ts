@@ -12,6 +12,35 @@ declare module "@mariozechner/pi-tui" {
 		label: string;
 		description?: string;
 	}
+
+	export class Box {
+		constructor(...args: unknown[]);
+		addChild(child: unknown): void;
+	}
+
+	export class Container {
+		constructor(...args: unknown[]);
+		addChild(child: unknown): void;
+		render(width: number): string[];
+		invalidate(): void;
+	}
+
+	export class SettingsList {
+		constructor(...args: unknown[]);
+		handleInput(data: string): void;
+		updateValue(id: string, value: string): void;
+	}
+
+	export class Spacer {
+		constructor(...args: unknown[]);
+	}
+
+	export class Text {
+		constructor(...args: unknown[]);
+	}
+
+	export function truncateToWidth(text: string, width: number, suffix?: string, pad?: boolean): string;
+	export function visibleWidth(text: string): number;
 }
 
 declare module "@mariozechner/pi-coding-agent" {
@@ -20,7 +49,7 @@ declare module "@mariozechner/pi-coding-agent" {
 		custom<T>(
 			renderer: (
 				tui: { requestRender(): void },
-				theme: unknown,
+				theme: Theme,
 				keybindings: unknown,
 				done: () => void,
 			) => {
@@ -53,6 +82,14 @@ declare module "@mariozechner/pi-coding-agent" {
 	}
 
 	type MaybePromise<T> = T | Promise<T>;
+
+	export interface Theme {
+		fg(color: string, text: string): string;
+		bold(text: string): string;
+		getFgAnsi?(name: string): string;
+	}
+
+	export function getSettingsListTheme(): unknown;
 
 	export interface ExtensionAPI {
 		exec(
@@ -111,6 +148,21 @@ declare module "@mariozechner/pi-coding-agent" {
 	): boolean;
 }
 
+
+declare module "node:assert/strict" {
+	const assert: {
+		equal(actual: unknown, expected: unknown, message?: string): void;
+		deepEqual(actual: unknown, expected: unknown, message?: string): void;
+		ok(value: unknown, message?: string): void;
+	};
+
+	export default assert;
+}
+
+declare const process: {
+	platform: string;
+	env: Record<string, string | undefined>;
+};
 
 declare module "node:os" {
 	export function homedir(): string;
