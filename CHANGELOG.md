@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-04-01
+
+### Changed
+- Updated `@mariozechner/pi-coding-agent` and `@mariozechner/pi-tui` peer dependencies to ^0.64.0
+- Improved RTK note message to guide users through '/rtk' toggle in Pi TUI
+
 ## [0.5.1] - 2026-03-24
 
 ### Fixed

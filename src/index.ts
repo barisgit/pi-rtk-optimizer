@@ -28,7 +28,7 @@ function trimMessage(raw: string, maxLength = 220): string {
 }
 
 const SOURCE_FILTER_TROUBLESHOOTING_NOTE =
-	"RTK note: If file edits repeatedly fail because old text does not match, run '/rtk', turn off 'Read source filtering enabled', re-read the file, apply the edit, then turn it back on.";
+	"RTK note: If file edits repeatedly fail because old text does not match, ask the user to manually run '/rtk' in the Pi TUI, disable 'Read source filtering enabled', re-read the file, apply the edit, then ask the user to manually re-enable it in the Pi TUI.";
 
 function mergeCompactionDetails(
 	existingDetails: unknown,
