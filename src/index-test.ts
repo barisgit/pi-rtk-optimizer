@@ -27,7 +27,28 @@ mock.module("@mariozechner/pi-tui", () => ({
 	visibleWidth: (text: string) => text.length,
 }));
 
-const { createBoundedNoticeTracker } = await import("./index.ts");
+const { createBoundedNoticeTracker, shouldInjectSourceFilterTroubleshootingNote } = await import("./index.ts");
+const { DEFAULT_RTK_INTEGRATION_CONFIG } = await import("./types.ts");
+
+function configWith(overrides: {
+	enabled?: boolean;
+	compactionEnabled?: boolean;
+	sourceFilteringEnabled?: boolean;
+	sourceFilteringLevel?: "none" | "minimal" | "aggressive";
+}): typeof DEFAULT_RTK_INTEGRATION_CONFIG {
+	const base = DEFAULT_RTK_INTEGRATION_CONFIG;
+	return {
+		...base,
+		enabled: overrides.enabled ?? base.enabled,
+		outputCompaction: {
+			...base.outputCompaction,
+			enabled: overrides.compactionEnabled ?? base.outputCompaction.enabled,
+			sourceCodeFilteringEnabled:
+				overrides.sourceFilteringEnabled ?? base.outputCompaction.sourceCodeFilteringEnabled,
+			sourceCodeFiltering: overrides.sourceFilteringLevel ?? base.outputCompaction.sourceCodeFiltering,
+		},
+	};
+}
 
 runTest("bounded notice tracker evicts old entries and supports reset", () => {
 	const tracker = createBoundedNoticeTracker(2);
@@ -49,6 +70,45 @@ runTest("bounded notice tracker coerces invalid limits to a safe minimum", () =>
 	assert.equal(tracker.remember("alpha"), true);
 	assert.equal(tracker.remember("beta"), true);
 	assert.equal(tracker.remember("alpha"), true);
+});
+
+runTest("source-filter note injected when source filtering is active", () => {
+	assert.equal(
+		shouldInjectSourceFilterTroubleshootingNote(
+			configWith({ sourceFilteringEnabled: true, sourceFilteringLevel: "minimal" }),
+		),
+		true,
+	);
+	assert.equal(
+		shouldInjectSourceFilterTroubleshootingNote(
+			configWith({ sourceFilteringEnabled: true, sourceFilteringLevel: "aggressive" }),
+		),
+		true,
+	);
+});
+
+runTest("source-filter note skipped when extension is disabled", () => {
+	assert.equal(shouldInjectSourceFilterTroubleshootingNote(configWith({ enabled: false })), false);
+});
+
+runTest("source-filter note skipped when compaction is disabled", () => {
+	assert.equal(shouldInjectSourceFilterTroubleshootingNote(configWith({ compactionEnabled: false })), false);
+});
+
+runTest("source-filter note skipped when source filtering flag is off", () => {
+	assert.equal(
+		shouldInjectSourceFilterTroubleshootingNote(configWith({ sourceFilteringEnabled: false })),
+		false,
+	);
+});
+
+runTest("source-filter note skipped when filtering level is 'none'", () => {
+	assert.equal(
+		shouldInjectSourceFilterTroubleshootingNote(
+			configWith({ sourceFilteringEnabled: true, sourceFilteringLevel: "none" }),
+		),
+		false,
+	);
 });
 
 console.log("All index tests passed.");
