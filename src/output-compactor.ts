@@ -1,3 +1,4 @@
+import { getAgentDir } from "@mariozechner/pi-coding-agent";
 import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import {
@@ -60,7 +61,7 @@ const LOSSY_TECHNIQUE_PREFIXES = [
 
 const READ_EXACT_OUTPUT_LINE_THRESHOLD = 80;
 const READ_COMPACTION_BANNER_PREFIX = "[RTK compacted output:";
-const USER_SKILL_ROOTS = [join(homedir(), ".pi", "agent", "skills"), join(homedir(), ".agents", "skills")];
+const USER_SKILL_ROOTS = [join(getAgentDir(), "skills"), join(homedir(), ".agents", "skills")];
 
 function normalizePathForComparison(path: string): string {
 	return process.platform === "win32" ? path.toLowerCase() : path;

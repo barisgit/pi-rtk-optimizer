@@ -143,7 +143,7 @@ function buildSettingItems(config: RtkIntegrationConfig): SettingItem[] {
 		{
 			id: "outputPreserveExactSkillReads",
 			label: "Preserve exact skill reads",
-			description: "If on, read results under ~/.pi/agent/skills, ~/.agents/skills, .pi/skills, and ancestor .agents/skills skip read compaction",
+			description: "If on, read results under the global Pi skills directory (default: ~/.pi/agent/skills, respects PI_CODING_AGENT_DIR), ~/.agents/skills, .pi/skills, and ancestor .agents/skills skip read compaction",
 			currentValue: toOnOff(config.outputCompaction.preserveExactSkillReads),
 			values: ON_OFF,
 		},

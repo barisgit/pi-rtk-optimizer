@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { mock } from "bun:test";
 
-import { compactToolResult } from "./output-compactor.ts";
 import { cloneDefaultConfig, runTest } from "./test-helpers.ts";
+
+const TEST_AGENT_DIR = "/tmp/.pi/agent";
+
+mock.module("@mariozechner/pi-coding-agent", () => ({
+	getAgentDir: () => TEST_AGENT_DIR,
+}));
+
+const { compactToolResult } = await import("./output-compactor.ts");
 
 function buildReadContent(lineCount: number): string {
 	const lines: string[] = [];
@@ -216,7 +223,7 @@ runTest("skill reads stay exact when preserveExactSkillReads is enabled for user
 	const result = compactToolResult(
 		{
 			toolName: "read",
-			input: { path: join(homedir(), ".pi", "agent", "skills", "example", "SKILL.md") },
+			input: { path: join(TEST_AGENT_DIR, "skills", "example", "SKILL.md") },
 			content: [{ type: "text", text: content }],
 		},
 		config,

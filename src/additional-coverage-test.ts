@@ -1,13 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { mock } from "bun:test";
 
-import {
-	ensureConfigExists,
-	getRtkIntegrationConfigPath,
-	loadRtkIntegrationConfig,
-	normalizeRtkIntegrationConfig,
-	saveRtkIntegrationConfig,
-} from "./config-store.ts";
 import { clearOutputMetrics, getOutputMetricsSummary, trackOutputSavings } from "./output-metrics.ts";
 import { runTest } from "./test-helpers.ts";
 import { matchesCommandPatterns, normalizeCommandForDetection } from "./techniques/command-detection.ts";
@@ -18,6 +12,18 @@ import { applyRtkCommandEnvironment } from "./rtk-command-environment.ts";
 import { sanitizeStreamingBashExecutionResult } from "./tool-execution-sanitizer.ts";
 import { sanitizeRtkEmojiOutput } from "./techniques/emoji.ts";
 import { stripRtkHookWarnings } from "./techniques/rtk.ts";
+
+mock.module("@mariozechner/pi-coding-agent", () => ({
+	getAgentDir: () => "/tmp/.pi/agent",
+}));
+
+const {
+	ensureConfigExists,
+	getRtkIntegrationConfigPath,
+	loadRtkIntegrationConfig,
+	normalizeRtkIntegrationConfig,
+	saveRtkIntegrationConfig,
+} = await import("./config-store.ts");
 
 function makeTempConfigPath(): string {
 	return `${getRtkIntegrationConfigPath()}.test-${Date.now()}-${Math.random().toString(16).slice(2)}.json`;

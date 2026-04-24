@@ -89,6 +89,7 @@ declare module "@mariozechner/pi-coding-agent" {
 		getFgAnsi?(name: string): string;
 	}
 
+	export function getAgentDir(): string;
 	export function getSettingsListTheme(): unknown;
 
 	export interface ExtensionAPI {

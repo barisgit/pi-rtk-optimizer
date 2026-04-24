@@ -4,6 +4,7 @@ import { mock } from "bun:test";
 import { cloneDefaultConfig, runTest } from "./test-helpers.ts";
 
 mock.module("@mariozechner/pi-coding-agent", () => ({
+	getAgentDir: () => "/tmp/.pi/agent",
 	getSettingsListTheme: () => ({}),
 }));
 

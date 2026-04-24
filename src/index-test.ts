@@ -4,6 +4,7 @@ import { mock } from "bun:test";
 import { runTest } from "./test-helpers.ts";
 
 mock.module("@mariozechner/pi-coding-agent", () => ({
+	getAgentDir: () => "/tmp/.pi/agent",
 	getSettingsListTheme: () => ({}),
 	isToolCallEventType: (toolName: string, event: Record<string, unknown>) => event.toolName === toolName,
 }));
