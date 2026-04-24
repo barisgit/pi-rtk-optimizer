@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-04-24
+
+### Changed
+- Config path resolution now uses Pi's `getAgentDir()` API so `PI_CODING_AGENT_DIR` is respected for extension config paths (thanks to @tynanbe for PR #3).
+- Global skill-read preservation paths now resolve through Pi's agent directory so `PI_CODING_AGENT_DIR` is respected (thanks to @tynanbe for PR #3).
+- Source-filter troubleshooting note injection now only runs when output compaction, source filtering, and read truncation safeguards are active (thanks to @philipbjorge for PR #4).
+- Updated `@mariozechner/pi-coding-agent` and `@mariozechner/pi-tui` peer dependencies to ^0.70.0.
+- Clarified README and settings modal copy for global extension/config paths, skill directory paths, source-filter note behavior, architecture, and event hooks.
+
+### Removed
+- Removed the unused local asset directory.
+- Removed the `session_switch` event refresh handler.
+
 ## [0.5.3] - 2026-04-01
 
 ### Changed
