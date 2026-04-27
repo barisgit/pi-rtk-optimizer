@@ -1,5 +1,7 @@
 # pi-rtk-optimizer
 
+[![npm version](https://img.shields.io/npm/v/pi-rtk-optimizer?style=flat-square)](https://www.npmjs.com/package/pi-rtk-optimizer) [![License](https://img.shields.io/github/license/MasuRii/pi-rtk-optimizer?style=flat-square)](LICENSE)
+
 > RTK command rewriting and tool output compaction extension for the Pi coding agent.
 
 <img width="1360" height="752" alt="image" src="https://github.com/user-attachments/assets/f4536889-62ec-429a-984e-dc0de9f1f709" />
@@ -12,19 +14,9 @@
 ### Command Rewriting
 
 - **Automatic rewriting** or **suggestion-only** mode for common development workflows
-- Supported command categories:
-  - **Git/GitHub** — `git`, `gh` commands
-  - **Filesystem** — `cat`, `head`, `tail`, `grep`, `rg`, `ls`, `tree`, `find`, `diff`, `wc`, `bash`, `cmd`, `powershell`
-  - **Rust** — `cargo` commands
-  - **JavaScript** — `vitest`, `npm`, `yarn`, `pnpm`, `bun` commands
-  - **Python** — `pytest`, `python`, `pip`, `uv` commands
-  - **Go** — `go` commands
-  - **Containers** — `docker`, `docker-compose`, `podman` commands
-  - **Network** — `curl`, `wget` commands
-  - **Package Managers** — `apt`, `brew`, `dnf`, `pacman`, `yum` commands
-- Runtime guard when `rtk` binary is unavailable (falls back to original commands only in rewrite mode)
-- Safe rewrite bypasses for structured `gh` output commands and non-interactive container shell sessions
-- Improved command parsing for `sed`, shell separators, and `pnpm dlx` proxy rewrites
+- Delegates bash command rewrite decisions to the installed `rtk rewrite` command, keeping RTK as the source of truth for supported commands, shell parsing, bypasses, and compound-command behavior
+- Runtime guard when `rtk` binary is unavailable (raw commands run unchanged and repeated missing-binary rewrite probes are avoided)
+- Pi-specific shell safety fixups for rewritten commands on Windows
 
 ### Output Compaction Pipeline
 
@@ -126,19 +118,11 @@ A starter template is included at `config/config.example.json`.
 | `guardWhenRtkMissing` | boolean | `true` | Run original commands when rtk binary unavailable |
 | `showRewriteNotifications` | boolean | `true` | Show rewrite notices in TUI |
 
-#### Rewrite Category Toggles
+#### Rewrite Source
 
-| Option | Default | Commands Affected |
-|--------|---------|-------------------|
-| `rewriteGitGithub` | `true` | `git`, `gh` |
-| `rewriteFilesystem` | `true` | `cat`, `head`, `tail`, `grep`, `rg`, `ls`, `tree`, `find`, `diff`, `wc` |
-| `rewriteRust` | `true` | `cargo` |
-| `rewriteJavaScript` | `true` | `vitest`, `npm`, `yarn`, `pnpm`, `bun` |
-| `rewritePython` | `true` | `pytest`, `python`, `pip`, `uv` |
-| `rewriteGo` | `true` | `go` |
-| `rewriteContainers` | `true` | `docker`, `docker-compose`, `podman` |
-| `rewriteNetwork` | `true` | `curl`, `wget` |
-| `rewritePackageManagers` | `true` | `apt`, `brew`, `dnf`, `pacman`, `yum` |
+Bash command support is intentionally resolved by the installed `rtk` binary through `rtk rewrite`. The extension does not maintain duplicate rewrite rules or category classifiers; update/configure RTK itself for command support policy.
+
+> **Breaking in 0.6.0:** Rewrite category toggles (`rewriteGitGithub`, `rewriteFilesystem`, `rewriteRust`, `rewriteJavaScript`, `rewritePython`, `rewriteGo`, `rewriteContainers`, `rewriteNetwork`, and `rewritePackageManagers`) were removed from the extension config surface. Existing rewrite policy should be configured in RTK because the extension now delegates rewrite ownership to `rtk rewrite`.
 
 #### Output Compaction Settings
 
@@ -185,15 +169,6 @@ Skill-read preservation covers the global Pi skills directory (`~/.pi/agent/skil
   "mode": "rewrite",
   "guardWhenRtkMissing": true,
   "showRewriteNotifications": true,
-  "rewriteGitGithub": true,
-  "rewriteFilesystem": true,
-  "rewriteRust": true,
-  "rewriteJavaScript": true,
-  "rewritePython": true,
-  "rewriteGo": true,
-  "rewriteContainers": true,
-  "rewriteNetwork": true,
-  "rewritePackageManagers": true,
   "outputCompaction": {
     "enabled": true,
     "stripAnsi": true,

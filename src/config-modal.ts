@@ -54,25 +54,11 @@ function parseIntegerInRange(value: string, min: number, max: number): number | 
 }
 
 function summarizeConfig(config: RtkIntegrationConfig, runtimeStatus: RuntimeStatus): string {
-	const categories = [
-		config.rewriteGitGithub ? "git" : "",
-		config.rewriteFilesystem ? "files" : "",
-		config.rewriteRust ? "rust" : "",
-		config.rewriteJavaScript ? "js" : "",
-		config.rewritePython ? "python" : "",
-		config.rewriteGo ? "go" : "",
-		config.rewriteContainers ? "containers" : "",
-		config.rewriteNetwork ? "network" : "",
-		config.rewritePackageManagers ? "packages" : "",
-	]
-		.filter((value) => value.length > 0)
-		.join(",");
-
 	const runtime = runtimeStatus.rtkAvailable
 		? "rtk=available"
 		: `rtk=missing${runtimeStatus.lastError ? ` (${runtimeStatus.lastError})` : ""}`;
 
-	return `enabled=${config.enabled}, mode=${config.mode}, rewriteNotice=${config.showRewriteNotifications}, compaction=${config.outputCompaction.enabled}, sourceFilterEnabled=${config.outputCompaction.sourceCodeFilteringEnabled}, preserveSkillReads=${config.outputCompaction.preserveExactSkillReads}, sourceFilter=${config.outputCompaction.sourceCodeFiltering}, categories=[${categories || "none"}], ${runtime}`;
+	return `enabled=${config.enabled}, mode=${config.mode}, rewriteSource=rtk, rewriteNotice=${config.showRewriteNotifications}, compaction=${config.outputCompaction.enabled}, sourceFilterEnabled=${config.outputCompaction.sourceCodeFilteringEnabled}, preserveSkillReads=${config.outputCompaction.preserveExactSkillReads}, sourceFilter=${config.outputCompaction.sourceCodeFiltering}, ${runtime}`;
 }
 
 function buildSettingItems(config: RtkIntegrationConfig): SettingItem[] {
@@ -208,69 +194,6 @@ function buildSettingItems(config: RtkIntegrationConfig): SettingItem[] {
 			label: "Track output savings",
 			description: "Collect in-session compaction metrics for /rtk stats",
 			currentValue: toOnOff(config.outputCompaction.trackSavings),
-			values: ON_OFF,
-		},
-		{
-			id: "rewriteGitGithub",
-			label: "Rewrite git / gh",
-			description: "git status/log/diff and gh pr/issue/run/api/release",
-			currentValue: toOnOff(config.rewriteGitGithub),
-			values: ON_OFF,
-		},
-		{
-			id: "rewriteFilesystem",
-			label: "Rewrite filesystem commands",
-			description: "cat, head, rg/grep, ls, tree, find, diff",
-			currentValue: toOnOff(config.rewriteFilesystem),
-			values: ON_OFF,
-		},
-		{
-			id: "rewriteRust",
-			label: "Rewrite Rust commands",
-			description: "cargo test/build/clippy/check/install/nextest/fmt",
-			currentValue: toOnOff(config.rewriteRust),
-			values: ON_OFF,
-		},
-		{
-			id: "rewriteJavaScript",
-			label: "Rewrite JavaScript/TypeScript",
-			description: "vitest, npm/npx/next, tsc, lint, prettier, playwright, prisma",
-			currentValue: toOnOff(config.rewriteJavaScript),
-			values: ON_OFF,
-		},
-		{
-			id: "rewritePython",
-			label: "Rewrite Python",
-			description: "pytest, ruff, pip, uv pip",
-			currentValue: toOnOff(config.rewritePython),
-			values: ON_OFF,
-		},
-		{
-			id: "rewriteGo",
-			label: "Rewrite Go",
-			description: "go test/build/vet and golangci-lint",
-			currentValue: toOnOff(config.rewriteGo),
-			values: ON_OFF,
-		},
-		{
-			id: "rewriteContainers",
-			label: "Rewrite containers",
-			description: "docker compose/ps/images/logs/run/build/exec and kubectl core ops",
-			currentValue: toOnOff(config.rewriteContainers),
-			values: ON_OFF,
-		},
-		{
-			id: "rewriteNetwork",
-			label: "Rewrite network",
-			description: "curl and wget",
-			currentValue: toOnOff(config.rewriteNetwork),
-			values: ON_OFF,
-		},
-		{
-			id: "rewritePackageManagers",
-			label: "Rewrite package managers",
-			description: "pnpm list/ls/outdated/build/typecheck and npm list/outdated",
-			currentValue: toOnOff(config.rewritePackageManagers),
 			values: ON_OFF,
 		},
 	];
@@ -418,24 +341,6 @@ function applySetting(config: RtkIntegrationConfig, id: string, value: string): 
 					trackSavings: value === "on",
 				},
 			};
-		case "rewriteGitGithub":
-			return { ...config, rewriteGitGithub: value === "on" };
-		case "rewriteFilesystem":
-			return { ...config, rewriteFilesystem: value === "on" };
-		case "rewriteRust":
-			return { ...config, rewriteRust: value === "on" };
-		case "rewriteJavaScript":
-			return { ...config, rewriteJavaScript: value === "on" };
-		case "rewritePython":
-			return { ...config, rewritePython: value === "on" };
-		case "rewriteGo":
-			return { ...config, rewriteGo: value === "on" };
-		case "rewriteContainers":
-			return { ...config, rewriteContainers: value === "on" };
-		case "rewriteNetwork":
-			return { ...config, rewriteNetwork: value === "on" };
-		case "rewritePackageManagers":
-			return { ...config, rewritePackageManagers: value === "on" };
 		default:
 			return config;
 	}
@@ -461,15 +366,6 @@ function syncSettingValues(settingsList: SettingValueSyncTarget, config: RtkInte
 	settingsList.updateValue("outputAggregateLinterOutput", toOnOff(config.outputCompaction.aggregateLinterOutput));
 	settingsList.updateValue("outputGroupSearchOutput", toOnOff(config.outputCompaction.groupSearchOutput));
 	settingsList.updateValue("outputTrackSavings", toOnOff(config.outputCompaction.trackSavings));
-	settingsList.updateValue("rewriteGitGithub", toOnOff(config.rewriteGitGithub));
-	settingsList.updateValue("rewriteFilesystem", toOnOff(config.rewriteFilesystem));
-	settingsList.updateValue("rewriteRust", toOnOff(config.rewriteRust));
-	settingsList.updateValue("rewriteJavaScript", toOnOff(config.rewriteJavaScript));
-	settingsList.updateValue("rewritePython", toOnOff(config.rewritePython));
-	settingsList.updateValue("rewriteGo", toOnOff(config.rewriteGo));
-	settingsList.updateValue("rewriteContainers", toOnOff(config.rewriteContainers));
-	settingsList.updateValue("rewriteNetwork", toOnOff(config.rewriteNetwork));
-	settingsList.updateValue("rewritePackageManagers", toOnOff(config.rewritePackageManagers));
 }
 
 async function openSettingsModal(ctx: ExtensionCommandContext, controller: RtkIntegrationController): Promise<void> {

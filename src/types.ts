@@ -31,15 +31,6 @@ export interface RtkIntegrationConfig {
 	mode: RtkMode;
 	guardWhenRtkMissing: boolean;
 	showRewriteNotifications: boolean;
-	rewriteGitGithub: boolean;
-	rewriteFilesystem: boolean;
-	rewriteRust: boolean;
-	rewriteJavaScript: boolean;
-	rewritePython: boolean;
-	rewriteGo: boolean;
-	rewriteContainers: boolean;
-	rewriteNetwork: boolean;
-	rewritePackageManagers: boolean;
 	outputCompaction: RtkOutputCompactionConfig;
 }
 
@@ -48,15 +39,6 @@ export const DEFAULT_RTK_INTEGRATION_CONFIG: RtkIntegrationConfig = {
 	mode: "rewrite",
 	guardWhenRtkMissing: true,
 	showRewriteNotifications: true,
-	rewriteGitGithub: true,
-	rewriteFilesystem: true,
-	rewriteRust: true,
-	rewriteJavaScript: true,
-	rewritePython: true,
-	rewriteGo: true,
-	rewriteContainers: true,
-	rewriteNetwork: true,
-	rewritePackageManagers: true,
 	outputCompaction: {
 		enabled: true,
 		stripAnsi: true,

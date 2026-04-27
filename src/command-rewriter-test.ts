@@ -2,159 +2,117 @@ import assert from "node:assert/strict";
 
 import { computeRewriteDecision } from "./command-rewriter.ts";
 import { cloneDefaultConfig, runTest } from "./test-helpers.ts";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
-function expectedProxyExecutable(base: string): string {
-	const windowsExecutables = new Set(["npm", "npx", "pnpm", "yarn"]);
-	return process.platform === "win32" && windowsExecutables.has(base) ? `${base}.cmd` : base;
+function createMockPi(execResult: { code: number; stdout?: string; stderr?: string }): ExtensionAPI {
+	return { exec: async () => execResult } as unknown as ExtensionAPI;
 }
 
-runTest("pnpm dlx rewrites through RTK proxy instead of generic pnpm wrapper", () => {
+runTest("empty command unchanged", async () => {
 	const config = cloneDefaultConfig();
-	const decision = computeRewriteDecision("pnpm dlx create-vite@latest demo --template react-ts", config);
+	const decision = await computeRewriteDecision("", config, createMockPi({ code: 1 }));
+	assert.equal(decision.changed, false);
+	assert.equal(decision.reason, "empty");
+});
 
-	assert.equal(decision.changed, true);
-	assert.equal(decision.rule?.id, "pnpm-dlx-proxy");
-	assert.equal(
-		decision.rewrittenCommand,
-		`rtk proxy ${expectedProxyExecutable("pnpm")} dlx create-vite@latest demo --template react-ts`,
+runTest("already rtk unchanged", async () => {
+	const config = cloneDefaultConfig();
+	const decision = await computeRewriteDecision("rtk status", config, createMockPi({ code: 1 }));
+	assert.equal(decision.changed, false);
+	assert.equal(decision.reason, "already_rtk");
+});
+
+runTest("rtk unsupported heredoc result leaves command unchanged", async () => {
+	const config = cloneDefaultConfig();
+	const decision = await computeRewriteDecision("cat <<EOF", config, createMockPi({ code: 1 }));
+	assert.equal(decision.changed, false);
+	assert.equal(decision.reason, "no_match");
+});
+
+runTest("quoted heredoc marker is delegated to RTK rewrite", async () => {
+	const config = cloneDefaultConfig();
+	const command = 'echo "<<not heredoc" && git status';
+	const decision = await computeRewriteDecision(
+		command,
+		config,
+		createMockPi({ code: 3, stdout: 'echo "<<not heredoc" && rtk git status' }),
 	);
+	assert.equal(decision.changed, true);
+	assert.equal(decision.rewrittenCommand, 'echo "<<not heredoc" && rtk git status');
+	assert.equal(decision.reason, "ok");
 });
 
-runTest("docker run with shell command bypasses rewrite when interactive flags are missing", () => {
-	const config = cloneDefaultConfig();
-	const decision = computeRewriteDecision("docker run ubuntu bash", config);
+runTest("legacy category toggles do not pre-filter RTK rewrite source of truth", async () => {
+	const config = { ...cloneDefaultConfig(), rewriteGitGithub: false };
+	const decision = await computeRewriteDecision("git status", config, createMockPi({ code: 3, stdout: "rtk git status" }));
+	assert.equal(decision.changed, true);
+	assert.equal(decision.rewrittenCommand, "rtk git status");
+	assert.equal(decision.reason, "ok");
+});
 
+runTest("rtk exit 0 rewrites", async () => {
+	const config = cloneDefaultConfig();
+	const decision = await computeRewriteDecision("git status", config, createMockPi({ code: 0, stdout: "rtk git status" }));
+	assert.equal(decision.changed, true);
+	assert.equal(decision.rewrittenCommand, "rtk git status");
+	assert.equal(decision.reason, "ok");
+});
+
+runTest("rtk exit 3 rewrites", async () => {
+	const config = cloneDefaultConfig();
+	const decision = await computeRewriteDecision("git status", config, createMockPi({ code: 3, stdout: "rtk git status" }));
+	assert.equal(decision.changed, true);
+	assert.equal(decision.rewrittenCommand, "rtk git status");
+	assert.equal(decision.reason, "ok");
+});
+
+runTest("exit 1 leaves unchanged", async () => {
+	const config = cloneDefaultConfig();
+	const decision = await computeRewriteDecision("git status", config, createMockPi({ code: 1 }));
 	assert.equal(decision.changed, false);
-	assert.equal(decision.rewrittenCommand, "docker run ubuntu bash");
 	assert.equal(decision.reason, "no_match");
 });
 
-runTest("docker run with -it keeps container rewrite enabled", () => {
+runTest("exit 2 leaves unchanged", async () => {
 	const config = cloneDefaultConfig();
-	const decision = computeRewriteDecision("docker run -it ubuntu bash", config);
-
-	assert.equal(decision.changed, true);
-	assert.equal(decision.rule?.id, "docker");
-	assert.equal(decision.rewrittenCommand, "rtk docker run -it ubuntu bash");
-});
-
-runTest("docker compose exec without -it bypasses interactive shell rewrite", () => {
-	const config = cloneDefaultConfig();
-	const decision = computeRewriteDecision("docker compose exec web bash", config);
-
+	const decision = await computeRewriteDecision("git status", config, createMockPi({ code: 2, stderr: "denied" }));
 	assert.equal(decision.changed, false);
-	assert.equal(decision.rewrittenCommand, "docker compose exec web bash");
-});
-
-runTest("container rewrites stay enabled for scripted shells and non-shell commands", () => {
-	const config = cloneDefaultConfig();
-
-	const scriptedShell = computeRewriteDecision('docker run ubuntu bash -lc "echo hi"', config);
-	assert.equal(scriptedShell.changed, true);
-	assert.equal(scriptedShell.rule?.id, "docker");
-	assert.equal(scriptedShell.rewrittenCommand, 'rtk docker run ubuntu bash -lc "echo hi"');
-
-	const nonShell = computeRewriteDecision("docker run ubuntu python app.py", config);
-	assert.equal(nonShell.changed, true);
-	assert.equal(nonShell.rule?.id, "docker");
-	assert.equal(nonShell.rewrittenCommand, "rtk docker run ubuntu python app.py");
-});
-
-runTest("kubectl exec requires interactive flags before rewriting shell sessions", () => {
-	const config = cloneDefaultConfig();
-	const missingFlagsDecision = computeRewriteDecision("kubectl exec pod-123 -- bash", config);
-	assert.equal(missingFlagsDecision.changed, false);
-	assert.equal(missingFlagsDecision.rewrittenCommand, "kubectl exec pod-123 -- bash");
-
-	const interactiveDecision = computeRewriteDecision("kubectl exec -it pod-123 -- bash", config);
-	assert.equal(interactiveDecision.changed, true);
-	assert.equal(interactiveDecision.rule?.id, "kubectl");
-	assert.equal(interactiveDecision.rewrittenCommand, "rtk kubectl exec -it pod-123 -- bash");
-});
-
-runTest("sed scripts keep internal separators intact while later pipe segments still rewrite", () => {
-	const config = cloneDefaultConfig();
-	const decision = computeRewriteDecision("sed -e s/a/b/;d file.txt | git status", config);
-
-	assert.equal(decision.changed, true);
-	assert.equal(decision.rewrittenCommand, "sed -e s/a/b/;d file.txt | rtk git status");
-	assert.equal(decision.rule?.id, "git-any");
-});
-
-runTest("background operators rewrite both command segments without misreading redirect ampersands", () => {
-	const config = cloneDefaultConfig();
-	const backgroundDecision = computeRewriteDecision("git status & cargo test", config);
-	assert.equal(backgroundDecision.changed, true);
-	assert.equal(backgroundDecision.rewrittenCommand, "rtk git status & rtk cargo test");
-
-	const redirectDecision = computeRewriteDecision("cargo test 2>&1 | head -5", config);
-	assert.equal(redirectDecision.changed, true);
-	assert.equal(redirectDecision.rewrittenCommand, "rtk cargo test 2>&1 | head -5");
-	assert.equal(redirectDecision.rule?.id, "cargo-any");
-});
-
-runTest("gh structured output commands bypass RTK rewrites", () => {
-	const config = cloneDefaultConfig();
-	const structuredCommands = [
-		"gh pr list --json number,title",
-		"gh issue list --jq '.[].title'",
-		"gh pr view 123 --template '{{.title}}'",
-	];
-
-	for (const command of structuredCommands) {
-		const decision = computeRewriteDecision(command, config);
-		assert.equal(decision.changed, false);
-		assert.equal(decision.rewrittenCommand, command);
-		assert.equal(decision.reason, "no_match");
-	}
-});
-
-runTest("compound find and search shell flows bypass rewrites when RTK parity is unsafe", () => {
-	const config = cloneDefaultConfig();
-	const auditedCommands = [
-		"find src -type f | xargs grep todo",
-		"find . -name '*.ts' -exec grep -n FIXME {} +",
-		"grep -R TODO src | head -n 5",
-		"rg TODO src && wc -l",
-	];
-
-	for (const command of auditedCommands) {
-		const decision = computeRewriteDecision(command, config);
-		assert.equal(decision.changed, false, command);
-		assert.equal(decision.rewrittenCommand, command, command);
-		assert.equal(decision.reason, "no_match", command);
-	}
-});
-
-runTest("formatting-sensitive ls flows bypass rewrites", () => {
-	const config = cloneDefaultConfig();
-	const auditedCommands = ["ls -la", "ls -l src | grep command-rewriter"];
-
-	for (const command of auditedCommands) {
-		const decision = computeRewriteDecision(command, config);
-		assert.equal(decision.changed, false, command);
-		assert.equal(decision.rewrittenCommand, command, command);
-		assert.equal(decision.reason, "no_match", command);
-	}
-});
-
-runTest("native bash shell proxy flows bypass rewrites when RTK parity is unsafe", () => {
-	const config = cloneDefaultConfig();
-	const command = 'bash -lc "find src -type f | xargs grep todo"';
-	const decision = computeRewriteDecision(command, config);
-
-	assert.equal(decision.changed, false);
-	assert.equal(decision.rewrittenCommand, command);
 	assert.equal(decision.reason, "no_match");
 });
 
-runTest("python proxy rewrites preserve the original executable token", () => {
+runTest("unknown category passes through to RTK", async () => {
 	const config = cloneDefaultConfig();
-	const decision = computeRewriteDecision('python3.11 -c "print(1)"', config);
-
+	const pi = createMockPi({ code: 0, stdout: "rtk custom" });
+	const decision = await computeRewriteDecision("custom-cmd", config, pi);
 	assert.equal(decision.changed, true);
-	assert.equal(decision.rule?.id, "python-proxy");
-	assert.equal(decision.rewrittenCommand, `rtk proxy ${expectedProxyExecutable("python3.11")} -c "print(1)"`);
+	assert.equal(decision.rewrittenCommand, "rtk custom");
+	assert.equal(decision.reason, "ok");
+});
+
+runTest("exec error/timeout leaves unchanged", async () => {
+	const config = cloneDefaultConfig();
+	const pi = {
+		exec: async () => {
+			throw new Error("timeout");
+		},
+	} as unknown as ExtensionAPI;
+	const decision = await computeRewriteDecision("git status", config, pi);
+	assert.equal(decision.changed, false);
+	assert.equal(decision.reason, "no_match");
+});
+
+runTest("compound commands forwarded to RTK", async () => {
+	const config = cloneDefaultConfig();
+	let capturedArgs: string[] = [];
+	const pi = {
+		exec: async (_cmd: string, args: string[]) => {
+			capturedArgs = args;
+			return { code: 0, stdout: "rtk result" };
+		},
+	} as unknown as ExtensionAPI;
+	const decision = await computeRewriteDecision("git status && cargo test", config, pi);
+	assert.equal(decision.changed, true);
+	assert.deepEqual(capturedArgs, ["rewrite", "git status && cargo test"]);
 });
 
 console.log("All command-rewriter tests passed.");

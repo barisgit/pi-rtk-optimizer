@@ -60,30 +60,6 @@ export function normalizeRtkIntegrationConfig(raw: unknown): RtkIntegrationConfi
 			source.showRewriteNotifications,
 			DEFAULT_RTK_INTEGRATION_CONFIG.showRewriteNotifications,
 		),
-		rewriteGitGithub: toBoolean(
-			source.rewriteGitGithub,
-			DEFAULT_RTK_INTEGRATION_CONFIG.rewriteGitGithub,
-		),
-		rewriteFilesystem: toBoolean(
-			source.rewriteFilesystem,
-			DEFAULT_RTK_INTEGRATION_CONFIG.rewriteFilesystem,
-		),
-		rewriteRust: toBoolean(source.rewriteRust, DEFAULT_RTK_INTEGRATION_CONFIG.rewriteRust),
-		rewriteJavaScript: toBoolean(
-			source.rewriteJavaScript,
-			DEFAULT_RTK_INTEGRATION_CONFIG.rewriteJavaScript,
-		),
-		rewritePython: toBoolean(source.rewritePython, DEFAULT_RTK_INTEGRATION_CONFIG.rewritePython),
-		rewriteGo: toBoolean(source.rewriteGo, DEFAULT_RTK_INTEGRATION_CONFIG.rewriteGo),
-		rewriteContainers: toBoolean(
-			source.rewriteContainers,
-			DEFAULT_RTK_INTEGRATION_CONFIG.rewriteContainers,
-		),
-		rewriteNetwork: toBoolean(source.rewriteNetwork, DEFAULT_RTK_INTEGRATION_CONFIG.rewriteNetwork),
-		rewritePackageManagers: toBoolean(
-			source.rewritePackageManagers,
-			DEFAULT_RTK_INTEGRATION_CONFIG.rewritePackageManagers,
-		),
 		outputCompaction: {
 			enabled: toBoolean(
 				outputCompactionSource.enabled,

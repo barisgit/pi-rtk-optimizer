@@ -21,13 +21,14 @@ runTest("rewrite mode still requires RTK availability when guard is enabled", ()
 	assert.equal(shouldSkipCommandHandlingWhenRtkMissing(config, runtimeStatus(true)), false);
 });
 
-runTest("suggest mode does not suppress suggestions when RTK is missing", () => {
+runTest("suggest mode uses RTK availability guard to avoid repeated missing-binary rewrite probes", () => {
 	const config = cloneDefaultConfig();
 	config.mode = "suggest";
 	config.guardWhenRtkMissing = true;
 
-	assert.equal(shouldRequireRtkAvailabilityForCommandHandling(config), false);
-	assert.equal(shouldSkipCommandHandlingWhenRtkMissing(config, runtimeStatus(false)), false);
+	assert.equal(shouldRequireRtkAvailabilityForCommandHandling(config), true);
+	assert.equal(shouldSkipCommandHandlingWhenRtkMissing(config, runtimeStatus(false)), true);
+	assert.equal(shouldSkipCommandHandlingWhenRtkMissing(config, runtimeStatus(true)), false);
 });
 
 runTest("guard disabled never blocks command handling", () => {

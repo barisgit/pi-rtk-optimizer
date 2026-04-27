@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-04-27
+
+### Changed
+- **Breaking:** Command rewriting now delegates rewrite decisions to the installed `rtk rewrite` command, making RTK the source of truth for command support, shell parsing, bypasses, and compound-command behavior instead of the extension's local rewrite rule tables.
+
+### Removed
+- **Breaking:** Removed the rewrite category configuration surface (`rewriteGitGithub`, `rewriteFilesystem`, `rewriteRust`, `rewriteJavaScript`, `rewritePython`, `rewriteGo`, `rewriteContainers`, `rewriteNetwork`, and `rewritePackageManagers`) from configuration normalization, examples, settings UI, and documentation. Configure rewrite policy in RTK itself instead of this extension.
+
 ## [0.5.5] - 2026-04-24
 
 ### Changed

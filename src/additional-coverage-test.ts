@@ -64,7 +64,7 @@ runTest("config-store normalizes invalid values and clamps numeric ranges", () =
 
 	assert.equal(normalized.enabled, true);
 	assert.equal(normalized.mode, "rewrite");
-	assert.equal(normalized.rewriteGitGithub, false);
+	assert.equal(Object.hasOwn(normalized, "rewriteGitGithub"), false);
 	assert.equal(normalized.outputCompaction.stripAnsi, false);
 	assert.equal(normalized.outputCompaction.sourceCodeFilteringEnabled, true);
 	assert.equal(normalized.outputCompaction.sourceCodeFiltering, "minimal");

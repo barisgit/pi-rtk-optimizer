@@ -3,7 +3,7 @@ import type { RtkIntegrationConfig, RuntimeStatus } from "./types.js";
 export function shouldRequireRtkAvailabilityForCommandHandling(
 	config: Pick<RtkIntegrationConfig, "mode" | "guardWhenRtkMissing">,
 ): boolean {
-	return config.mode === "rewrite" && config.guardWhenRtkMissing;
+	return config.guardWhenRtkMissing;
 }
 
 export function shouldSkipCommandHandlingWhenRtkMissing(

@@ -123,7 +123,6 @@ export default function rtkIntegrationExtension(pi: ExtensionAPI): void {
 			return;
 		}
 
-		console.warn(`[${EXTENSION_NAME}] ${message}`);
 		if (ctx.hasUI) {
 			ctx.ui.notify(message, level);
 		}
@@ -222,7 +221,7 @@ export default function rtkIntegrationExtension(pi: ExtensionAPI): void {
 	};
 
 	const maybeWarnRtkMissing = (ctx: ExtensionContext): void => {
-		if (!config.enabled || config.mode !== "rewrite" || !config.guardWhenRtkMissing) {
+		if (!config.enabled || !config.guardWhenRtkMissing) {
 			return;
 		}
 
@@ -237,7 +236,8 @@ export default function rtkIntegrationExtension(pi: ExtensionAPI): void {
 
 		missingRtkWarningShown = true;
 		const reason = runtimeStatus.lastError ? ` (${runtimeStatus.lastError})` : "";
-		warnOnce(ctx, `${EXTENSION_NAME}: rtk binary unavailable, command rewrite bypassed${reason}.`);
+		const handling = config.mode === "suggest" ? "rewrite suggestions" : "command rewrite";
+		warnOnce(ctx, `${EXTENSION_NAME}: rtk binary unavailable, ${handling} bypassed${reason}.`);
 	};
 
 	const ensureRuntimeStatusFresh = async (): Promise<void> => {
@@ -361,8 +361,8 @@ export default function rtkIntegrationExtension(pi: ExtensionAPI): void {
 			return {};
 		}
 
-		const decision = computeRewriteDecision(event.input.command, config);
-		if (!decision.changed || !decision.rule) {
+		const decision = await computeRewriteDecision(event.input.command, config, pi);
+		if (!decision.changed) {
 			return {};
 		}
 
@@ -376,7 +376,7 @@ export default function rtkIntegrationExtension(pi: ExtensionAPI): void {
 		}
 
 		if (config.mode === "suggest") {
-			const suggestionKey = `${decision.rule.id}:${decision.rewrittenCommand}`;
+			const suggestionKey = `${decision.originalCommand}:${decision.rewrittenCommand}`;
 			if (suggestionNotices.remember(suggestionKey) && ctx.hasUI) {
 				ctx.ui.notify(`RTK suggestion: ${decision.rewrittenCommand}`, "info");
 			}

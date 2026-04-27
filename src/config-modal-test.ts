@@ -137,6 +137,8 @@ await runAsyncTest("config modal command handlers route RTK subcommands to contr
 
 	await definition?.handler("show", infoCtx.ctx);
 	assert.ok(lastNotification(infoCtx.notifications).message.includes("mode=rewrite"));
+	assert.ok(lastNotification(infoCtx.notifications).message.includes("rewriteSource=rtk"));
+	assert.equal(lastNotification(infoCtx.notifications).message.includes("categories="), false);
 
 	await definition?.handler("path", infoCtx.ctx);
 	assert.equal(lastNotification(infoCtx.notifications).message, "rtk config: C:/tmp/pi-rtk-optimizer/config.json");
