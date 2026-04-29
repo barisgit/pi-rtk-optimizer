@@ -218,9 +218,9 @@ runTest("rewrite pipeline safety keeps exported RTK_DB_PATH on rewritten produce
 	);
 
 	if (process.platform === "win32") {
-		assert.ok(rewritten.startsWith("{"));
-		assert.equal(rewritten.startsWith("export RTK_DB_PATH="), false);
-		assert.ok(rewritten.includes("RTK_DB_PATH="));
+		assert.ok(rewritten.startsWith("export RTK_DB_PATH="));
+		assert.equal(rewritten.startsWith("RTK_DB_PATH="), false);
+		assert.ok(rewritten.includes("; {"));
 		assert.ok(
 			rewritten.includes('rtk git diff agent/extensions/pi-multi-auth/account-manager.ts > "$__pi_rtk_pipe_tmp"'),
 		);
@@ -231,6 +231,19 @@ runTest("rewrite pipeline safety keeps exported RTK_DB_PATH on rewritten produce
 			rewritten,
 			applyRtkCommandEnvironment("rtk git diff agent/extensions/pi-multi-auth/account-manager.ts | head -200"),
 		);
+	}
+});
+
+runTest("rewrite pipeline safety buffers explicit RTK_DB_PATH export preludes", () => {
+	const command = 'export RTK_DB_PATH="/custom/history.db"; rtk git diff | head -200';
+	const rewritten = applyRewrittenCommandShellSafetyFixups(command);
+
+	if (process.platform === "win32") {
+		assert.ok(rewritten.startsWith('export RTK_DB_PATH="/custom/history.db"; {'));
+		assert.ok(rewritten.includes('rtk git diff > "$__pi_rtk_pipe_tmp"'));
+		assert.ok(rewritten.includes('(head -200) < "$__pi_rtk_pipe_tmp"'));
+	} else {
+		assert.equal(rewritten, command);
 	}
 });
 
