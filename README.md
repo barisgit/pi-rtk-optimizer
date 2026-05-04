@@ -16,6 +16,7 @@
 - **Automatic rewriting** or **suggestion-only** mode for common development workflows
 - Delegates bash command rewrite decisions to the installed `rtk rewrite` command, keeping RTK as the source of truth for supported commands, shell parsing, bypasses, and compound-command behavior
 - Runtime guard when `rtk` binary is unavailable (raw commands run unchanged and repeated missing-binary rewrite probes are avoided)
+- `/rtk show` and `/rtk verify` surface the resolved `rtk` executable path when the host can resolve it
 - Pi-specific shell safety fixups for rewritten commands on Windows
 
 ### Output Compaction Pipeline
@@ -106,6 +107,8 @@ Actual global path: $PI_CODING_AGENT_DIR/extensions/pi-rtk-optimizer/config.json
 ```
 
 A starter template is included at `config/config.example.json`.
+
+For audit or debugging sessions, keep `showRewriteNotifications` enabled and disable lossy `read` compaction/source filtering before gathering evidence. Existing `config.json` files are user-owned runtime state; do not overwrite local choices unless you intentionally want to change live extension behavior.
 
 ### Configuration Options
 
@@ -207,9 +210,8 @@ src/
 ├── index.ts                # Extension bootstrap and event wiring
 ├── config-store.ts         # Config load/save with normalization
 ├── config-modal.ts         # TUI settings modal and /rtk handler
-├── command-rewriter.ts         # Command tokenization and rewrite logic
-├── rewrite-bypass.ts           # Rewrite safety bypass rules for interactive/structured commands
-├── rewrite-rules.ts            # Rewrite rule catalog
+├── command-rewriter.ts         # Command rewrite decision adapter for RTK delegation
+├── rtk-rewrite-provider.ts     # Calls `rtk rewrite` as the rewrite source of truth
 ├── rewrite-pipeline-safety.ts  # Shell-safety fixups for rewritten commands
 ├── rtk-command-environment.ts  # RTK_DB_PATH scoping for rewritten commands
 ├── shell-env-prefix.ts         # Environment assignment parsing helpers
@@ -252,17 +254,18 @@ Automatic fixes applied on Windows:
 
 - **Peer dependencies:** `@mariozechner/pi-coding-agent`, `@mariozechner/pi-tui`
 - **Runtime:** Node.js ≥20, optional `rtk` binary for command rewriting
+- **Development verification:** Node.js ≥20, npm, and Bun for the test scripts
 
 ## Development
 
 ```bash
-# Build
+# Transpile-only TypeScript build check
 npm run build
 
 # Full typecheck
 npm run typecheck
 
-# Run tests
+# Run Bun-based tests
 npm run test
 
 # Full verification
