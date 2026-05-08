@@ -9,8 +9,8 @@ const TOP_LEVEL_SUBCOMMANDS: CompletionDefinition[] = [
 	{ name: "show", description: "Show current RTK config + runtime summary" },
 	{ name: "path", description: "Show RTK config file path" },
 	{ name: "verify", description: "Check whether rtk binary is available" },
-	{ name: "stats", description: "Show output compaction metrics" },
-	{ name: "clear-stats", description: "Clear output compaction metrics" },
+	{ name: "stats", description: "Show RTK rewrite/pipe activity metrics" },
+	{ name: "clear-stats", description: "Clear RTK activity metrics" },
 	{ name: "reset", description: "Reset RTK settings to defaults" },
 	{ name: "help", description: "Show usage help" },
 ];

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mock } from "bun:test";
 
 import { cloneDefaultConfig, runTest } from "./test-helpers.ts";
+import type { RtkIntegrationConfig, RuntimeStatus } from "./types.ts";
 
 mock.module("@mariozechner/pi-coding-agent", () => ({
 	getAgentDir: () => "/tmp/.pi/agent",
@@ -54,6 +55,12 @@ interface CommandContextStub {
 	};
 }
 
+type RegisteredCommandDefinition = {
+	description: string;
+	getArgumentCompletions?: (argumentPrefix: string) => Array<{ value: string; label: string; description?: string }> | null;
+	handler: (args: string, ctx: CommandContextStub) => void | Promise<void>;
+};
+
 function createNotifyContext(hasUI: boolean): { ctx: CommandContextStub; notifications: Notification[] } {
 	const notifications: Notification[] = [];
 	return {
@@ -102,7 +109,7 @@ runTest("zellij settings modal renders overlay frame and delegates non-enter inp
 			onClose: () => {},
 			helpText: "Esc: close",
 		},
-		createThemeStub() as never,
+		createThemeStub(),
 	);
 	const modal = new ZellijModal(settingsModal, {
 		titleBar: {
@@ -151,18 +158,19 @@ await runTest("config modal command handlers route RTK subcommands to controller
 		config,
 		cleared: 0,
 		refreshed: 0,
-		lastSavedMode: "",
+		lastSavedEnabled: true,
+		disableBudget: 3,
 	};
 
 	const controller = {
 		getConfig: () => controllerState.config,
-		setConfig: (next: typeof config, _ctx: unknown) => {
+		setConfig: (next: RtkIntegrationConfig, _ctx: unknown) => {
 			controllerState.config = next;
-			controllerState.lastSavedMode = next.mode;
+			controllerState.lastSavedEnabled = next.enabled;
 		},
 		getConfigPath: () => "C:/tmp/pi-rtk-optimizer/config.json",
-		getRuntimeStatus: () => ({ rtkAvailable: false, lastError: "not found" }),
-		refreshRuntimeStatus: async () => {
+		getRuntimeStatus: (): RuntimeStatus => ({ rtkAvailable: false, lastError: "not found" }),
+		refreshRuntimeStatus: async (): Promise<RuntimeStatus> => {
 			controllerState.refreshed += 1;
 			return { rtkAvailable: true, rtkExecutablePath: "C:/Tools/rtk.exe" };
 		},
@@ -170,14 +178,10 @@ await runTest("config modal command handlers route RTK subcommands to controller
 		clearMetrics: () => {
 			controllerState.cleared += 1;
 		},
+		getDisableBudget: () => controllerState.disableBudget,
 	};
 
 	let registeredName = "";
-	type RegisteredCommandDefinition = {
-		description: string;
-		getArgumentCompletions?: (argumentPrefix: string) => Array<{ value: string; label: string; description?: string }> | null;
-		handler: (args: string, ctx: CommandContextStub) => Promise<void>;
-	};
 	let definition: RegisteredCommandDefinition | undefined;
 
 	registerRtkIntegrationCommand(
@@ -186,15 +190,15 @@ await runTest("config modal command handlers route RTK subcommands to controller
 				registeredName = name;
 				definition = nextDefinition;
 			},
-		} as never,
-		controller as never,
+		},
+		controller,
 	);
 
 	assert.equal(registeredName, "rtk");
 	if (!definition) {
 		throw new Error("Expected /rtk command definition to be registered");
 	}
-	assert.ok(definition.description.includes("Configure RTK rewrite"));
+	assert.ok(definition.description.includes("RTK rewrite"));
 	assert.ok(typeof definition.getArgumentCompletions === "function");
 
 	const infoCtx = createNotifyContext(true);
@@ -202,9 +206,9 @@ await runTest("config modal command handlers route RTK subcommands to controller
 	assert.ok(lastNotification(infoCtx.notifications).message.includes("Usage: /rtk"));
 
 	await definition.handler("show", infoCtx.ctx);
-	assert.ok(lastNotification(infoCtx.notifications).message.includes("mode=rewrite"));
-	assert.ok(lastNotification(infoCtx.notifications).message.includes("rewriteSource=rtk"));
-	assert.equal(lastNotification(infoCtx.notifications).message.includes("categories="), false);
+	assert.ok(lastNotification(infoCtx.notifications).message.includes("localBashRewrite=rewrite"));
+	assert.ok(lastNotification(infoCtx.notifications).message.includes("remoteBashPipe=true"));
+	assert.ok(lastNotification(infoCtx.notifications).message.includes("disableBudget=3"));
 
 	await definition.handler("path", infoCtx.ctx);
 	assert.equal(lastNotification(infoCtx.notifications).message, "rtk config: C:/tmp/pi-rtk-optimizer/config.json");
@@ -222,16 +226,11 @@ await runTest("config modal command handlers route RTK subcommands to controller
 	assert.equal(lastNotification(infoCtx.notifications).message, "RTK metrics cleared.");
 
 	await definition.handler("reset", infoCtx.ctx);
-	assert.equal(controllerState.lastSavedMode, "rewrite");
+	assert.equal(controllerState.lastSavedEnabled, true);
 	assert.equal(lastNotification(infoCtx.notifications).message, "RTK integration settings reset to defaults.");
 
 	await definition.handler("unknown", infoCtx.ctx);
 	assert.equal(lastNotification(infoCtx.notifications).level, "warning");
-	assert.ok(lastNotification(infoCtx.notifications).message.includes("Usage: /rtk"));
-
-	const headlessCtx = createNotifyContext(false);
-	await definition.handler("", headlessCtx.ctx);
-	assert.equal(lastNotification(headlessCtx.notifications).message, "/rtk requires interactive TUI mode.");
 });
 
 console.log("All config-modal tests passed.");

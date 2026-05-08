@@ -69,14 +69,21 @@ declare module "@mariozechner/pi-coding-agent" {
 
 	export interface ExtensionCommandContext extends ExtensionContext {}
 
+	export interface ToolCallEvent {
+		toolCallId: string;
+		toolName: string;
+		input: Record<string, unknown>;
+	}
+
 	export interface ToolResultEvent {
+		toolCallId: string;
 		toolName: string;
 		input: Record<string, unknown>;
 		content: Array<Record<string, unknown>>;
 		details?: unknown;
 	}
 
-	export interface BashToolCallEvent {
+	export interface BashToolCallEvent extends ToolCallEvent {
 		toolName: "bash";
 		input: { command: string } & Record<string, unknown>;
 	}
@@ -102,7 +109,7 @@ declare module "@mariozechner/pi-coding-agent" {
 		on(
 			eventName: "tool_call",
 			handler: (
-				event: Record<string, unknown>,
+				event: ToolCallEvent,
 				ctx: ExtensionContext,
 			) => MaybePromise<Record<string, unknown> | void>,
 		): void;
@@ -136,16 +143,34 @@ declare module "@mariozechner/pi-coding-agent" {
 				handler: (args: string, ctx: ExtensionCommandContext) => MaybePromise<void>;
 			},
 		): void;
+
+		registerTool<TParams extends Record<string, unknown> = Record<string, unknown>>(
+			definition: {
+				name: string;
+				label: string;
+				description: string;
+				promptSnippet?: string;
+				promptGuidelines?: string[];
+				parameters: unknown;
+				execute: (
+					toolCallId: string,
+					params: TParams,
+					signal: AbortSignal | undefined,
+					onUpdate: unknown,
+					ctx: ExtensionContext,
+				) => MaybePromise<Record<string, unknown>>;
+			},
+		): void;
 	}
 
 	export function isToolCallEventType(
 		toolName: "bash",
-		event: Record<string, unknown>,
+		event: ToolCallEvent,
 	): event is BashToolCallEvent;
 
 	export function isToolCallEventType(
 		toolName: string,
-		event: Record<string, unknown>,
+		event: ToolCallEvent,
 	): boolean;
 }
 
@@ -190,4 +215,6 @@ declare module "node:fs" {
 	export function renameSync(oldPath: string, newPath: string): void;
 	export function unlinkSync(path: string): void;
 	export function writeFileSync(path: string, data: string, encoding: "utf-8"): void;
+	export function mkdtempSync(prefix: string): string;
+	export function rmSync(path: string, options?: { recursive?: boolean; force?: boolean }): void;
 }

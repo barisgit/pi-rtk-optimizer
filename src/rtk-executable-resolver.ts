@@ -14,6 +14,10 @@ interface ResolverCommand {
 	args: string[];
 }
 
+export interface RtkExecHost {
+	exec: ExtensionAPI["exec"];
+}
+
 export interface ResolveRtkExecutableOptions {
 	platform?: typeof process.platform;
 	timeoutMs?: number;
@@ -65,7 +69,7 @@ function fallbackResolution(resolver: RtkExecutableResolverName, warning: string
 }
 
 export async function resolveRtkExecutable(
-	pi: ExtensionAPI,
+	pi: RtkExecHost,
 	options: ResolveRtkExecutableOptions = {},
 ): Promise<RtkExecutableResolution> {
 	const resolver = getResolverCommand(options.platform ?? process.platform);

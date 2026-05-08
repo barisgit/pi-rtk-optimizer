@@ -1,5 +1,4 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { resolveRtkExecutable, type RtkExecutableResolution } from "./rtk-executable-resolver.js";
+import { resolveRtkExecutable, type RtkExecHost, type RtkExecutableResolution } from "./rtk-executable-resolver.js";
 
 export interface RtkRewriteProviderResult {
 	changed: boolean;
@@ -30,7 +29,7 @@ function normalizeOptions(optionsOrTimeout: number | RtkRewriteProviderOptions):
 }
 
 export async function resolveRtkRewrite(
-	pi: ExtensionAPI,
+	pi: RtkExecHost,
 	command: string,
 	optionsOrTimeout: number | RtkRewriteProviderOptions = {},
 ): Promise<RtkRewriteProviderResult> {

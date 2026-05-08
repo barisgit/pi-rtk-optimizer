@@ -38,12 +38,26 @@ export function sanitizeStreamingBashExecutionResult(
 	command: string | undefined | null,
 ): StreamingBashExecutionSanitizationResult {
 	const resultRecord = toRecord(result);
-	const sourceContent = Array.isArray(resultRecord.content) ? resultRecord.content : null;
-	if (!sourceContent || sourceContent.length === 0) {
-		return { changed: false, result };
+	let changed = false;
+	const nextRecord: Record<string, unknown> = { ...resultRecord };
+
+	for (const key of ["stdout", "stderr"] as const) {
+		const value = resultRecord[key];
+		if (typeof value !== "string") {
+			continue;
+		}
+		const sanitizedText = sanitizeStreamingBashText(value, command);
+		if (sanitizedText !== value) {
+			nextRecord[key] = sanitizedText;
+			changed = true;
+		}
 	}
 
-	let changed = false;
+	const sourceContent = Array.isArray(resultRecord.content) ? resultRecord.content : null;
+	if (!sourceContent || sourceContent.length === 0) {
+		return changed ? { changed: true, result: nextRecord } : { changed: false, result };
+	}
+
 	const nextContent = sourceContent.map((block) => {
 		if (!block || typeof block !== "object" || Array.isArray(block)) {
 			return block;
@@ -73,7 +87,7 @@ export function sanitizeStreamingBashExecutionResult(
 	return {
 		changed: true,
 		result: {
-			...resultRecord,
+			...nextRecord,
 			content: nextContent,
 		},
 	};

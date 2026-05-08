@@ -1,5 +1,5 @@
 import { resolveRtkRewrite, type RtkRewriteProviderOptions } from "./rtk-rewrite-provider.js";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { RtkExecHost } from "./rtk-executable-resolver.js";
 import type { RtkIntegrationConfig } from "./types.js";
 
 export interface RewriteDecision {
@@ -13,7 +13,7 @@ export interface RewriteDecision {
 export async function computeRewriteDecision(
 	command: string,
 	_config: RtkIntegrationConfig,
-	pi: ExtensionAPI,
+	pi: RtkExecHost,
 	rewriteOptions: RtkRewriteProviderOptions = {},
 ): Promise<RewriteDecision> {
 	if (!command || !command.trim()) {

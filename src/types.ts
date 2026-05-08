@@ -1,70 +1,44 @@
 export const RTK_MODES = ["rewrite", "suggest"] as const;
-export const RTK_SOURCE_FILTER_LEVELS = ["none", "minimal", "aggressive"] as const;
+export const BUILTIN_PIPE_TOOLS = ["grep", "find"] as const;
 
 export type RtkMode = (typeof RTK_MODES)[number];
-export type RtkSourceFilterLevel = (typeof RTK_SOURCE_FILTER_LEVELS)[number];
+export type BuiltinPipeTool = (typeof BUILTIN_PIPE_TOOLS)[number];
 
-export interface RtkOutputCompactionConfig {
+export interface LocalBashRewriteConfig {
+	mode: RtkMode;
+	showNotifications: boolean;
+}
+
+export interface RemoteBashPipeCompactionConfig {
 	enabled: boolean;
-	stripAnsi: boolean;
-	readCompaction: {
-		enabled: boolean;
-	};
-	truncate: {
-		enabled: boolean;
-		maxChars: number;
-	};
-	sourceCodeFilteringEnabled: boolean;
-	preserveExactSkillReads: boolean;
-	sourceCodeFiltering: RtkSourceFilterLevel;
-	smartTruncate: {
-		enabled: boolean;
-		maxLines: number;
-	};
-	aggregateTestOutput: boolean;
-	filterBuildOutput: boolean;
-	compactGitOutput: boolean;
-	aggregateLinterOutput: boolean;
-	groupSearchOutput: boolean;
-	trackSavings: boolean;
+}
+
+export interface BuiltinPipeCompactionConfig {
+	enabled: boolean;
+	tools: BuiltinPipeTool[];
 }
 
 export interface RtkIntegrationConfig {
 	enabled: boolean;
-	mode: RtkMode;
 	guardWhenRtkMissing: boolean;
-	showRewriteNotifications: boolean;
-	outputCompaction: RtkOutputCompactionConfig;
+	localBashRewrite: LocalBashRewriteConfig;
+	remoteBashPipeCompaction: RemoteBashPipeCompactionConfig;
+	builtinPipeCompaction: BuiltinPipeCompactionConfig;
 }
 
 export const DEFAULT_RTK_INTEGRATION_CONFIG: RtkIntegrationConfig = {
 	enabled: true,
-	mode: "rewrite",
 	guardWhenRtkMissing: true,
-	showRewriteNotifications: true,
-	outputCompaction: {
+	localBashRewrite: {
+		mode: "rewrite",
+		showNotifications: true,
+	},
+	remoteBashPipeCompaction: {
 		enabled: true,
-		stripAnsi: true,
-		readCompaction: {
-			enabled: false,
-		},
-		truncate: {
-			enabled: true,
-			maxChars: 12_000,
-		},
-		sourceCodeFilteringEnabled: false,
-		preserveExactSkillReads: false,
-		sourceCodeFiltering: "none",
-		smartTruncate: {
-			enabled: false,
-			maxLines: 220,
-		},
-		aggregateTestOutput: true,
-		filterBuildOutput: true,
-		compactGitOutput: true,
-		aggregateLinterOutput: true,
-		groupSearchOutput: true,
-		trackSavings: true,
+	},
+	builtinPipeCompaction: {
+		enabled: false,
+		tools: ["grep", "find"],
 	},
 };
 
@@ -92,4 +66,3 @@ export interface RuntimeStatus {
 	rtkExecutableResolver?: string;
 	rtkExecutableResolutionWarning?: string;
 }
-

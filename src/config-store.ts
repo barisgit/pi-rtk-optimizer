@@ -2,42 +2,24 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import { dirname } from "node:path";
 import { CONFIG_PATH } from "./constants.js";
 import {
+	BUILTIN_PIPE_TOOLS,
 	DEFAULT_RTK_INTEGRATION_CONFIG,
 	RTK_MODES,
-	RTK_SOURCE_FILTER_LEVELS,
+	type BuiltinPipeTool,
 	type ConfigLoadResult,
 	type ConfigSaveResult,
 	type EnsureConfigResult,
 	type RtkIntegrationConfig,
-	type RtkSourceFilterLevel,
 } from "./types.js";
 
 function toBoolean(value: unknown, fallback: boolean): boolean {
 	return typeof value === "boolean" ? value : fallback;
 }
 
-function toInteger(value: unknown, fallback: number, min: number, max: number): number {
-	if (typeof value !== "number" || !Number.isFinite(value)) {
-		return fallback;
-	}
-	const rounded = Math.round(value);
-	return Math.max(min, Math.min(max, rounded));
-}
-
-function toMode(value: unknown): RtkIntegrationConfig["mode"] {
-	return RTK_MODES.includes(value as RtkIntegrationConfig["mode"])
-		? (value as RtkIntegrationConfig["mode"])
-		: DEFAULT_RTK_INTEGRATION_CONFIG.mode;
-}
-
-function toSourceFilterLevel(value: unknown, fallback: RtkSourceFilterLevel): RtkSourceFilterLevel {
-	return RTK_SOURCE_FILTER_LEVELS.includes(value as RtkSourceFilterLevel)
-		? (value as RtkSourceFilterLevel)
-		: fallback;
-}
-
-function hasOwnProperty(source: Record<string, unknown>, key: string): boolean {
-	return Object.prototype.hasOwnProperty.call(source, key);
+function toMode(value: unknown): RtkIntegrationConfig["localBashRewrite"]["mode"] {
+	return RTK_MODES.includes(value as RtkIntegrationConfig["localBashRewrite"]["mode"])
+		? (value as RtkIntegrationConfig["localBashRewrite"]["mode"])
+		: DEFAULT_RTK_INTEGRATION_CONFIG.localBashRewrite.mode;
 }
 
 function toObject(value: unknown): Record<string, unknown> {
@@ -47,112 +29,54 @@ function toObject(value: unknown): Record<string, unknown> {
 	return value as Record<string, unknown>;
 }
 
+function toBuiltinPipeTools(value: unknown): BuiltinPipeTool[] {
+	if (!Array.isArray(value)) {
+		return [...DEFAULT_RTK_INTEGRATION_CONFIG.builtinPipeCompaction.tools];
+	}
+
+	const allowed = new Set<string>(BUILTIN_PIPE_TOOLS);
+	const next: BuiltinPipeTool[] = [];
+	for (const entry of value) {
+		if (typeof entry === "string" && allowed.has(entry) && !next.includes(entry as BuiltinPipeTool)) {
+			next.push(entry as BuiltinPipeTool);
+		}
+	}
+
+	return next;
+}
+
 export function normalizeRtkIntegrationConfig(raw: unknown): RtkIntegrationConfig {
 	const source = toObject(raw);
-	const outputCompactionSource = toObject(source.outputCompaction);
-	const readCompactionSource = toObject(outputCompactionSource.readCompaction);
-	const truncateSource = toObject(outputCompactionSource.truncate);
-	const smartTruncateSource = toObject(outputCompactionSource.smartTruncate);
-	const hasReadCompaction = hasOwnProperty(outputCompactionSource, "readCompaction");
-	const legacyReadCompactionFallback = !hasReadCompaction;
-	const sourceFilteringFallback = legacyReadCompactionFallback
-		? true
-		: DEFAULT_RTK_INTEGRATION_CONFIG.outputCompaction.sourceCodeFilteringEnabled;
-	const sourceFilterLevelFallback = legacyReadCompactionFallback
-		? "minimal"
-		: DEFAULT_RTK_INTEGRATION_CONFIG.outputCompaction.sourceCodeFiltering;
-	const smartTruncateEnabledFallback = legacyReadCompactionFallback
-		? true
-		: DEFAULT_RTK_INTEGRATION_CONFIG.outputCompaction.smartTruncate.enabled;
+	const legacyOutputCompaction = toObject(source.outputCompaction);
+	const localBashRewrite = toObject(source.localBashRewrite);
+	const remoteBashPipeCompaction = toObject(source.remoteBashPipeCompaction);
+	const builtinPipeCompaction = toObject(source.builtinPipeCompaction);
 
 	return {
 		enabled: toBoolean(source.enabled, DEFAULT_RTK_INTEGRATION_CONFIG.enabled),
-		mode: toMode(source.mode),
 		guardWhenRtkMissing: toBoolean(
 			source.guardWhenRtkMissing,
 			DEFAULT_RTK_INTEGRATION_CONFIG.guardWhenRtkMissing,
 		),
-		showRewriteNotifications: toBoolean(
-			source.showRewriteNotifications,
-			DEFAULT_RTK_INTEGRATION_CONFIG.showRewriteNotifications,
-		),
-		outputCompaction: {
+		localBashRewrite: {
+			mode: toMode(localBashRewrite.mode ?? source.mode),
+			showNotifications: toBoolean(
+				localBashRewrite.showNotifications ?? source.showRewriteNotifications,
+				DEFAULT_RTK_INTEGRATION_CONFIG.localBashRewrite.showNotifications,
+			),
+		},
+		remoteBashPipeCompaction: {
 			enabled: toBoolean(
-				outputCompactionSource.enabled,
-				DEFAULT_RTK_INTEGRATION_CONFIG.outputCompaction.enabled,
+				remoteBashPipeCompaction.enabled ?? legacyOutputCompaction.enabled,
+				DEFAULT_RTK_INTEGRATION_CONFIG.remoteBashPipeCompaction.enabled,
 			),
-			stripAnsi: toBoolean(
-				outputCompactionSource.stripAnsi,
-				DEFAULT_RTK_INTEGRATION_CONFIG.outputCompaction.stripAnsi,
+		},
+		builtinPipeCompaction: {
+			enabled: toBoolean(
+				builtinPipeCompaction.enabled,
+				DEFAULT_RTK_INTEGRATION_CONFIG.builtinPipeCompaction.enabled,
 			),
-			readCompaction: {
-				enabled: hasReadCompaction
-					? toBoolean(
-							readCompactionSource.enabled,
-							DEFAULT_RTK_INTEGRATION_CONFIG.outputCompaction.readCompaction.enabled,
-						)
-					: true,
-			},
-			sourceCodeFilteringEnabled: toBoolean(
-				outputCompactionSource.sourceCodeFilteringEnabled,
-				sourceFilteringFallback,
-			),
-			preserveExactSkillReads: toBoolean(
-				outputCompactionSource.preserveExactSkillReads,
-				DEFAULT_RTK_INTEGRATION_CONFIG.outputCompaction.preserveExactSkillReads,
-			),
-			truncate: {
-				enabled: toBoolean(
-					truncateSource.enabled,
-					DEFAULT_RTK_INTEGRATION_CONFIG.outputCompaction.truncate.enabled,
-				),
-				maxChars: toInteger(
-					truncateSource.maxChars,
-					DEFAULT_RTK_INTEGRATION_CONFIG.outputCompaction.truncate.maxChars,
-					1_000,
-					200_000,
-				),
-			},
-			sourceCodeFiltering: toSourceFilterLevel(
-				outputCompactionSource.sourceCodeFiltering,
-				sourceFilterLevelFallback,
-			),
-			smartTruncate: {
-				enabled: toBoolean(
-					smartTruncateSource.enabled,
-					smartTruncateEnabledFallback,
-				),
-				maxLines: toInteger(
-					smartTruncateSource.maxLines,
-					DEFAULT_RTK_INTEGRATION_CONFIG.outputCompaction.smartTruncate.maxLines,
-					40,
-					4_000,
-				),
-			},
-			aggregateTestOutput: toBoolean(
-				outputCompactionSource.aggregateTestOutput,
-				DEFAULT_RTK_INTEGRATION_CONFIG.outputCompaction.aggregateTestOutput,
-			),
-			filterBuildOutput: toBoolean(
-				outputCompactionSource.filterBuildOutput,
-				DEFAULT_RTK_INTEGRATION_CONFIG.outputCompaction.filterBuildOutput,
-			),
-			compactGitOutput: toBoolean(
-				outputCompactionSource.compactGitOutput,
-				DEFAULT_RTK_INTEGRATION_CONFIG.outputCompaction.compactGitOutput,
-			),
-			aggregateLinterOutput: toBoolean(
-				outputCompactionSource.aggregateLinterOutput,
-				DEFAULT_RTK_INTEGRATION_CONFIG.outputCompaction.aggregateLinterOutput,
-			),
-			groupSearchOutput: toBoolean(
-				outputCompactionSource.groupSearchOutput,
-				DEFAULT_RTK_INTEGRATION_CONFIG.outputCompaction.groupSearchOutput,
-			),
-			trackSavings: toBoolean(
-				outputCompactionSource.trackSavings,
-				DEFAULT_RTK_INTEGRATION_CONFIG.outputCompaction.trackSavings,
-			),
+			tools: toBuiltinPipeTools(builtinPipeCompaction.tools),
 		},
 	};
 }
@@ -222,6 +146,6 @@ export function saveRtkIntegrationConfig(
 	}
 }
 
-export function getRtkIntegrationConfigPath(configPath = CONFIG_PATH): string {
-	return configPath;
+export function getRtkIntegrationConfigPath(): string {
+	return CONFIG_PATH;
 }

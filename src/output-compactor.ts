@@ -1,23 +1,12 @@
-import { getAgentDir } from "@mariozechner/pi-coding-agent";
-import { homedir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
-import {
-	aggregateLinterOutput,
-	aggregateTestOutput,
-	compactGitOutput,
-	detectLanguage,
-	filterBuildOutput,
-	filterSourceCode,
-	groupSearchResults,
-	sanitizeRtkEmojiOutput,
-	smartTruncate,
-	stripAnsiFast,
-	stripRtkHookWarnings,
-	truncate,
-} from "./techniques/index.js";
-import { trackOutputSavings } from "./output-metrics.js";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { resolveRtkRewrite } from "./rtk-rewrite-provider.js";
+import { splitLeadingEnvAssignments } from "./shell-env-prefix.js";
+import { trackRtkActivity } from "./output-metrics.js";
 import { toRecord } from "./record-utils.js";
-import type { RtkIntegrationConfig } from "./types.js";
+import type { RtkExecHost, RtkExecutableResolution } from "./rtk-executable-resolver.js";
+import type { BuiltinPipeTool, RtkIntegrationConfig } from "./types.js";
 
 interface ContentBlock {
 	type: string;
@@ -32,413 +21,192 @@ interface ToolResultLikeEvent {
 }
 
 export interface ToolResultCompactionMetadata {
-	applied: boolean;
-	techniques: string[];
-	truncated: boolean;
-	originalCharCount: number;
-	compactedCharCount: number;
-	originalLineCount: number;
-	compactedLineCount: number;
+	kind: "rtk-pipe";
+	tool: string;
+	filter: string;
 }
 
 export interface ToolResultCompactionOutcome {
 	changed: boolean;
-	content?: unknown[];
-	techniques: string[];
+	content?: unknown;
 	metadata?: ToolResultCompactionMetadata;
 }
 
-const LOSSY_TECHNIQUE_PREFIXES = [
-	"build",
-	"test",
-	"git",
-	"linter",
-	"search",
-	"truncate",
-	"smart-truncate",
-	"source:",
-] as const;
-
-const READ_EXACT_OUTPUT_LINE_THRESHOLD = 80;
-const READ_COMPACTION_BANNER_PREFIX = "[RTK compacted output:";
-const USER_SKILL_ROOTS = [join(getAgentDir(), "skills"), join(homedir(), ".agents", "skills")];
-
-function normalizePathForComparison(path: string): string {
-	return process.platform === "win32" ? path.toLowerCase() : path;
+export interface RtkPipeCompactionOptions {
+	pi: RtkExecHost;
+	executableResolution?: RtkExecutableResolution;
 }
 
-function isPathUnderRoot(targetPath: string, rootPath: string): boolean {
-	const normalizedTarget = normalizePathForComparison(resolve(targetPath));
-	const normalizedRoot = normalizePathForComparison(resolve(rootPath));
-	if (normalizedTarget === normalizedRoot) {
-		return true;
+const KNOWN_PIPE_FILTERS = new Set([
+	"cargo-test",
+	"pytest",
+	"go-test",
+	"go-build",
+	"tsc",
+	"vitest",
+	"grep",
+	"rg",
+	"find",
+	"fd",
+	"git-log",
+	"git-diff",
+	"git-status",
+	"mypy",
+	"ruff-check",
+	"ruff-format",
+	"prettier",
+]);
+
+function getFirstTextBlock(content: unknown): { blocks: ContentBlock[]; index: number; text: string } | undefined {
+	if (!Array.isArray(content)) {
+		return undefined;
 	}
 
-	const rootWithSeparator = normalizedRoot.endsWith(sep) ? normalizedRoot : `${normalizedRoot}${sep}`;
-	return normalizedTarget.startsWith(rootWithSeparator);
-}
-
-function isUnderAnyAncestorAgentsSkills(targetPath: string): boolean {
-	let currentDir = resolve(process.cwd());
-	while (true) {
-		if (isPathUnderRoot(targetPath, join(currentDir, ".agents", "skills"))) {
-			return true;
-		}
-
-		const parentDir = dirname(currentDir);
-		if (parentDir === currentDir) {
-			return false;
-		}
-
-		currentDir = parentDir;
-	}
-}
-
-function isSkillReadPath(filePath: string): boolean {
-	if (!filePath.trim()) {
-		return false;
+	const blocks = content as ContentBlock[];
+	const index = blocks.findIndex((block) => block?.type === "text" && typeof block.text === "string");
+	if (index === -1) {
+		return undefined;
 	}
 
-	const resolvedPath = resolve(filePath);
-	if (USER_SKILL_ROOTS.some((root) => isPathUnderRoot(resolvedPath, root))) {
-		return true;
+	return { blocks, index, text: blocks[index].text ?? "" };
+}
+
+function hasRemoteSession(input: unknown): boolean {
+	return typeof toRecord(input).session === "string";
+}
+
+function getCommand(input: unknown): string | undefined {
+	const command = toRecord(input).command;
+	return typeof command === "string" ? command : undefined;
+}
+
+function splitCommandWords(command: string): string[] {
+	return command.match(/(?:"[^"]*"|'[^']*'|\S+)/g)?.map((part) => part.replace(/^['"]|['"]$/g, "")) ?? [];
+}
+
+export function derivePipeFilterFromRtkCommand(command: string): string | undefined {
+	const withoutEnv = splitLeadingEnvAssignments(command).command.trim();
+	const words = splitCommandWords(withoutEnv);
+	if (words[0] !== "rtk") {
+		return undefined;
 	}
 
-	if (isPathUnderRoot(resolvedPath, join(process.cwd(), ".pi", "skills"))) {
-		return true;
+	const [first, second, third] = words.slice(1);
+	if (!first) {
+		return undefined;
 	}
 
-	return isUnderAnyAncestorAgentsSkills(resolvedPath);
-}
-
-function toArray(value: unknown): unknown[] {
-	return Array.isArray(value) ? value : [];
-}
-
-function normalizeCommand(input: Record<string, unknown>): string | undefined {
-	const raw = input.command;
-	if (typeof raw === "string" && raw.trim()) {
-		return raw;
+	let candidate: string | undefined;
+	if (["grep", "rg", "find", "fd", "pytest", "vitest", "tsc", "mypy", "prettier"].includes(first)) {
+		candidate = first;
+	} else if (first === "git" && ["diff", "status", "log"].includes(second ?? "")) {
+		candidate = `git-${second}`;
+	} else if (first === "cargo" && second === "test") {
+		candidate = "cargo-test";
+	} else if (first === "go" && ["test", "build"].includes(second ?? "")) {
+		candidate = `go-${second}`;
+	} else if (first === "ruff" && ["check", "format"].includes(second ?? "")) {
+		candidate = `ruff-${second}`;
+	} else if (first === "python" && second === "-m" && third === "pytest") {
+		candidate = "pytest";
 	}
-	return undefined;
+
+	return candidate && KNOWN_PIPE_FILTERS.has(candidate) ? candidate : undefined;
 }
 
-function normalizePath(input: Record<string, unknown>): string {
-	const raw = input.path;
-	if (typeof raw === "string") {
-		return raw;
+async function selectRemoteBashFilter(
+	command: string,
+	options: RtkPipeCompactionOptions,
+): Promise<string | undefined> {
+	const result = await resolveRtkRewrite(options.pi, command, {
+		executableResolution: options.executableResolution,
+	});
+	if (!result.changed) {
+		return undefined;
 	}
-	return "";
+	return derivePipeFilterFromRtkCommand(result.rewrittenCommand);
 }
 
-function hasExplicitReadRange(input: Record<string, unknown>): boolean {
-	return input.offset !== undefined || input.limit !== undefined;
+function selectBuiltinFilter(event: ToolResultLikeEvent, config: RtkIntegrationConfig): BuiltinPipeTool | undefined {
+	if (!config.builtinPipeCompaction.enabled) {
+		return undefined;
+	}
+	if (event.toolName !== "grep" && event.toolName !== "find") {
+		return undefined;
+	}
+	return config.builtinPipeCompaction.tools.includes(event.toolName) ? event.toolName : undefined;
 }
 
-function shouldPreserveExactReadOutput(
+async function runRtkPipe(
 	text: string,
-	input: Record<string, unknown>,
-	config: RtkIntegrationConfig,
-): boolean {
-	if (!config.outputCompaction.readCompaction.enabled) {
-		return true;
+	filter: string,
+	options: RtkPipeCompactionOptions,
+): Promise<{ code: number; stdout: string; stderr: string }> {
+	const executable = options.executableResolution?.command ?? "rtk";
+	const dir = mkdtempSync(join(tmpdir(), "pi-rtk-pipe-"));
+	const inputPath = join(dir, "input.txt");
+	try {
+		writeFileSync(inputPath, text, "utf-8");
+		const script = 'cat "$1" | "$2" pipe -f "$3"';
+		const result = await options.pi.exec("sh", ["-c", script, "pi-rtk-pipe", inputPath, executable, filter], {
+			timeout: 10_000,
+		});
+		return { code: result.code, stdout: result.stdout, stderr: result.stderr };
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
 	}
-
-	if (hasExplicitReadRange(input)) {
-		return true;
-	}
-
-	if (config.outputCompaction.preserveExactSkillReads && isSkillReadPath(normalizePath(input))) {
-		return true;
-	}
-
-	return countLines(text) <= READ_EXACT_OUTPUT_LINE_THRESHOLD;
 }
 
-function shouldApplyReadSourceFiltering(text: string, config: RtkIntegrationConfig): boolean {
-	const compaction = config.outputCompaction;
-	const lineCount = countLines(text);
-
-	return (
-		(compaction.smartTruncate.enabled && lineCount > compaction.smartTruncate.maxLines) ||
-		(compaction.truncate.enabled && text.length > compaction.truncate.maxChars)
-	);
-}
-
-function formatReadCompactionBanner(techniques: string[]): string {
-	return `${READ_COMPACTION_BANNER_PREFIX} ${techniques.join(", ")}]`;
-}
-
-function countLines(text: string): number {
-	if (!text) {
-		return 0;
-	}
-
-	const normalized = text.endsWith("\n") ? text.slice(0, -1) : text;
-	if (!normalized) {
-		return 1;
-	}
-
-	return normalized.split("\n").length;
-}
-
-function hasLossyCompaction(techniques: string[]): boolean {
-	return techniques.some((technique) =>
-		LOSSY_TECHNIQUE_PREFIXES.some((prefix) =>
-			prefix.endsWith(":") ? technique.startsWith(prefix) : technique === prefix,
-		),
-	);
-}
-
-function normalizeTechniqueResult(result: string | null, currentText: string): string {
-	return result === null ? currentText : result;
-}
-
-function compactBashText(
-	text: string,
-	command: string | undefined,
-	config: RtkIntegrationConfig,
-): { text: string; techniques: string[] } {
-	let nextText = text;
-	const techniques: string[] = [];
-	const compaction = config.outputCompaction;
-
-	if (compaction.stripAnsi) {
-		const stripped = stripAnsiFast(nextText);
-		if (stripped !== nextText) {
-			nextText = stripped;
-			techniques.push("ansi");
-		}
-	}
-
-	const withoutRtkHookWarnings = normalizeTechniqueResult(stripRtkHookWarnings(nextText, command), nextText);
-	if (withoutRtkHookWarnings !== nextText) {
-		nextText = withoutRtkHookWarnings;
-		techniques.push("rtk-hook-warning");
-	}
-
-	const withoutRtkEmoji = normalizeTechniqueResult(sanitizeRtkEmojiOutput(nextText, command), nextText);
-	if (withoutRtkEmoji !== nextText) {
-		nextText = withoutRtkEmoji;
-		techniques.push("rtk-emoji");
-	}
-
-	if (compaction.filterBuildOutput) {
-		const compacted = normalizeTechniqueResult(filterBuildOutput(nextText, command), nextText);
-		if (compacted !== nextText) {
-			nextText = compacted;
-			techniques.push("build");
-		}
-	}
-
-	if (compaction.aggregateTestOutput) {
-		const compacted = normalizeTechniqueResult(aggregateTestOutput(nextText, command), nextText);
-		if (compacted !== nextText) {
-			nextText = compacted;
-			techniques.push("test");
-		}
-	}
-
-	if (compaction.compactGitOutput) {
-		const compacted = normalizeTechniqueResult(compactGitOutput(nextText, command), nextText);
-		if (compacted !== nextText) {
-			nextText = compacted;
-			techniques.push("git");
-		}
-	}
-
-	if (compaction.aggregateLinterOutput) {
-		const compacted = normalizeTechniqueResult(aggregateLinterOutput(nextText, command), nextText);
-		if (compacted !== nextText) {
-			nextText = compacted;
-			techniques.push("linter");
-		}
-	}
-
-	if (compaction.truncate.enabled && nextText.length > compaction.truncate.maxChars) {
-		nextText = truncate(nextText, compaction.truncate.maxChars);
-		techniques.push("truncate");
-	}
-
-	return { text: nextText, techniques };
-}
-
-function compactReadText(
-	text: string,
-	filePath: string,
-	config: RtkIntegrationConfig,
-	preserveExactReadOutput: boolean,
-): { text: string; techniques: string[] } {
-	if (preserveExactReadOutput) {
-		return { text, techniques: [] };
-	}
-
-	let nextText = text;
-	const techniques: string[] = [];
-	const compaction = config.outputCompaction;
-
-	if (compaction.stripAnsi) {
-		const stripped = stripAnsiFast(nextText);
-		if (stripped !== nextText) {
-			nextText = stripped;
-			techniques.push("ansi");
-		}
-	}
-
-	const language = detectLanguage(filePath);
-	// Only apply lossy source filtering when a downstream line/char safeguard would otherwise trigger.
-	if (
-		compaction.sourceCodeFilteringEnabled &&
-		compaction.sourceCodeFiltering !== "none" &&
-		shouldApplyReadSourceFiltering(text, config)
-	) {
-		const filtered = normalizeTechniqueResult(
-			filterSourceCode(nextText, language, compaction.sourceCodeFiltering),
-			nextText,
-		);
-		if (filtered !== nextText) {
-			nextText = filtered;
-			techniques.push(`source:${compaction.sourceCodeFiltering}`);
-		}
-	}
-
-	if (compaction.smartTruncate.enabled) {
-		const lineCount = nextText.split("\n").length;
-		if (lineCount > compaction.smartTruncate.maxLines) {
-			const compacted = smartTruncate(nextText, compaction.smartTruncate.maxLines, language);
-			if (compacted !== nextText) {
-				nextText = compacted;
-				techniques.push("smart-truncate");
-			}
-		}
-	}
-
-	if (compaction.truncate.enabled && nextText.length > compaction.truncate.maxChars) {
-		nextText = truncate(nextText, compaction.truncate.maxChars);
-		techniques.push("truncate");
-	}
-
-	if (techniques.length > 0 && !nextText.startsWith(READ_COMPACTION_BANNER_PREFIX)) {
-		nextText = `${formatReadCompactionBanner(techniques)}\n${nextText}`;
-	}
-
-	return { text: nextText, techniques };
-}
-
-function compactGrepText(text: string, config: RtkIntegrationConfig): { text: string; techniques: string[] } {
-	let nextText = text;
-	const techniques: string[] = [];
-	const compaction = config.outputCompaction;
-
-	if (compaction.stripAnsi) {
-		const stripped = stripAnsiFast(nextText);
-		if (stripped !== nextText) {
-			nextText = stripped;
-			techniques.push("ansi");
-		}
-	}
-
-	if (compaction.groupSearchOutput) {
-		const grouped = normalizeTechniqueResult(groupSearchResults(nextText), nextText);
-		if (grouped !== nextText) {
-			nextText = grouped;
-			techniques.push("search");
-		}
-	}
-
-	if (compaction.truncate.enabled && nextText.length > compaction.truncate.maxChars) {
-		nextText = truncate(nextText, compaction.truncate.maxChars);
-		techniques.push("truncate");
-	}
-
-	return { text: nextText, techniques };
-}
-
-export function compactToolResult(
+export async function compactToolResult(
 	event: ToolResultLikeEvent,
 	config: RtkIntegrationConfig,
-): ToolResultCompactionOutcome {
-	if (!config.outputCompaction.enabled) {
-		return { changed: false, techniques: [] };
+	options: RtkPipeCompactionOptions,
+): Promise<ToolResultCompactionOutcome> {
+	const textBlock = getFirstTextBlock(event.content);
+	if (!textBlock) {
+		return { changed: false };
 	}
 
-	const input = toRecord(event.input);
-	const sourceContent = toArray(event.content);
-	if (sourceContent.length === 0) {
-		return { changed: false, techniques: [] };
+	let filter: string | undefined;
+	if (event.toolName === "bash") {
+		if (!config.remoteBashPipeCompaction.enabled || !hasRemoteSession(event.input)) {
+			return { changed: false };
+		}
+		const command = getCommand(event.input);
+		if (!command) {
+			return { changed: false };
+		}
+		filter = await selectRemoteBashFilter(command, options);
+	} else {
+		filter = selectBuiltinFilter(event, config);
 	}
 
-	let changed = false;
-	const allTechniques = new Set<string>();
-	const originalChunks: string[] = [];
-	const filteredChunks: string[] = [];
-
-	const nextContent = sourceContent.map((block) => {
-		if (!block || typeof block !== "object" || Array.isArray(block)) {
-			return block;
-		}
-
-		const contentBlock = block as ContentBlock;
-		if (contentBlock.type !== "text" || typeof contentBlock.text !== "string") {
-			return block;
-		}
-
-		let transformed = { text: contentBlock.text, techniques: [] as string[] };
-		if (event.toolName === "bash") {
-			transformed = compactBashText(contentBlock.text, normalizeCommand(input), config);
-		} else if (event.toolName === "read") {
-			const normalizedPath = normalizePath(input);
-			transformed = compactReadText(
-				contentBlock.text,
-				normalizedPath,
-				config,
-				shouldPreserveExactReadOutput(contentBlock.text, input, config),
-			);
-		} else if (event.toolName === "grep") {
-			transformed = compactGrepText(contentBlock.text, config);
-		}
-
-		for (const technique of transformed.techniques) {
-			allTechniques.add(technique);
-		}
-
-		originalChunks.push(contentBlock.text);
-		filteredChunks.push(transformed.text);
-
-		if (transformed.text !== contentBlock.text) {
-			changed = true;
-			return { ...contentBlock, text: transformed.text };
-		}
-
-		return block;
-	});
-
-	if (!changed) {
-		return { changed: false, techniques: [] };
+	if (!filter) {
+		return { changed: false };
 	}
 
-	const techniques = Array.from(allTechniques);
-	const originalText = originalChunks.join("\n");
-	const compactedText = filteredChunks.join("\n");
-
-	if (config.outputCompaction.trackSavings) {
-		trackOutputSavings(originalText, compactedText, event.toolName, techniques);
+	const result = await runRtkPipe(textBlock.text, filter, options);
+	if (result.code !== 0) {
+		trackRtkActivity({
+			kind: "pipe-error",
+			tool: event.toolName,
+			filter,
+			detail: result.stderr || `exit ${result.code}`,
+		});
+		return { changed: false };
 	}
 
-	const metadata: ToolResultCompactionMetadata = {
-		applied: true,
-		techniques,
-		truncated: hasLossyCompaction(techniques),
-		originalCharCount: originalText.length,
-		compactedCharCount: compactedText.length,
-		originalLineCount: countLines(originalText),
-		compactedLineCount: countLines(compactedText),
-	};
+	trackRtkActivity({ kind: "pipe", tool: event.toolName, filter, command: getCommand(event.input) });
 
+	const nextBlocks = [...textBlock.blocks];
+	nextBlocks[textBlock.index] = { ...nextBlocks[textBlock.index], text: result.stdout };
 	return {
 		changed: true,
-		content: nextContent,
-		techniques,
-		metadata,
+		content: nextBlocks,
+		metadata: {
+			kind: "rtk-pipe",
+			tool: event.toolName,
+			filter,
+		},
 	};
 }

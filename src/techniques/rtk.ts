@@ -3,7 +3,7 @@ const RTK_HOOK_WARNING_MESSAGES = [
 	"Hook outdated — run `rtk init -g` to update",
 ] as const;
 
-const RTK_HOOK_WARNING_PREFIX_MARKERS = ["[rtk] /!\\", "⚠", "[WARN]"] as const;
+const RTK_HOOK_WARNING_PREFIX_MARKERS = ["[rtk] /!\\", "\u26A0", "[WARN]"] as const;
 
 type HookWarningLineStripResult =
 	| {

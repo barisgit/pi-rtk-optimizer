@@ -1,4 +1,6 @@
 import { isToolCallEventType, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { StringEnum } from "@mariozechner/pi-ai";
+import { Type } from "typebox";
 import {
 	ensureConfigExists,
 	getRtkIntegrationConfigPath,
@@ -9,16 +11,23 @@ import {
 import { computeRewriteDecision } from "./command-rewriter.js";
 import { registerRtkIntegrationCommand } from "./config-modal.js";
 import { EXTENSION_NAME } from "./constants.js";
-import { clearOutputMetrics, getOutputMetricsSummary } from "./output-metrics.js";
+import { clearOutputMetrics, getOutputMetricsSummary, trackRtkActivity } from "./output-metrics.js";
 import { compactToolResult, type ToolResultCompactionMetadata } from "./output-compactor.js";
 import { toRecord } from "./record-utils.js";
 import { applyRtkCommandEnvironment } from "./rtk-command-environment.js";
 import { resolveRtkExecutable, type RtkExecutableResolution } from "./rtk-executable-resolver.js";
+import { registerRtkReadPruneProvider } from "./rtk-prune-provider.js";
 import { applyRewrittenCommandShellSafetyFixups } from "./rewrite-pipeline-safety.js";
 import { shouldRequireRtkAvailabilityForCommandHandling, shouldSkipCommandHandlingWhenRtkMissing } from "./runtime-guard.js";
 import { sanitizeStreamingBashExecutionResult } from "./tool-execution-sanitizer.js";
 import type { RtkIntegrationConfig, RuntimeStatus } from "./types.js";
 import { applyWindowsBashCompatibilityFixes } from "./windows-command-helpers.js";
+
+export type RtkExtensionAPI = Pick<ExtensionAPI, "exec" | "on" | "registerCommand" | "registerTool"> & {
+	events: { emit(event: string, payload: unknown): void };
+};
+
+const RTK_CONTROL_MAX_BUDGET = 20;
 
 function trimMessage(raw: string, maxLength = 220): string {
 	const clean = raw.replace(/\s+/g, " ").trim();
@@ -26,21 +35,6 @@ function trimMessage(raw: string, maxLength = 220): string {
 		return clean;
 	}
 	return `${clean.slice(0, maxLength - 1)}…`;
-}
-
-const SOURCE_FILTER_TROUBLESHOOTING_NOTE =
-	"RTK note: If file edits repeatedly fail because old text does not match, ask the user to manually run '/rtk' in the Pi TUI, disable 'Read compaction enabled', re-read the file, apply the edit, then ask the user to manually re-enable it in the Pi TUI.";
-
-export function shouldInjectSourceFilterTroubleshootingNote(config: RtkIntegrationConfig): boolean {
-	const compaction = config.outputCompaction;
-	return (
-		config.enabled &&
-		compaction.enabled &&
-		compaction.readCompaction.enabled &&
-		compaction.sourceCodeFilteringEnabled &&
-		compaction.sourceCodeFiltering !== "none" &&
-		(compaction.smartTruncate.enabled || compaction.truncate.enabled)
-	);
 }
 
 function mergeCompactionDetails(
@@ -100,7 +94,26 @@ export function createBoundedNoticeTracker(maxEntries: number): BoundedNoticeTra
 	};
 }
 
-export default function rtkIntegrationExtension(pi: ExtensionAPI): void {
+function hasRemoteSession(input: unknown): boolean {
+	return typeof toRecord(input).session === "string";
+}
+
+function isRtkControlTool(toolName: string): boolean {
+	return toolName === "rtk";
+}
+
+function normalizeDisableCount(raw: number | undefined): number | undefined {
+	if (typeof raw !== "number" || !Number.isFinite(raw)) {
+		return undefined;
+	}
+	const rounded = Math.floor(raw);
+	if (rounded < 1 || rounded > RTK_CONTROL_MAX_BUDGET) {
+		return undefined;
+	}
+	return rounded;
+}
+
+export default function rtkIntegrationExtension(pi: RtkExtensionAPI): void {
 	const initialLoad = loadRtkIntegrationConfig();
 	let config: RtkIntegrationConfig = initialLoad.config;
 	let pendingLoadWarning = initialLoad.warning;
@@ -108,7 +121,9 @@ export default function rtkIntegrationExtension(pi: ExtensionAPI): void {
 	const warnedMessages = createBoundedNoticeTracker(100);
 	const suggestionNotices = createBoundedNoticeTracker(200);
 	const activeBashCommands = new Map<string, string>();
+	const disabledToolCallIds = new Set<string>();
 	let missingRtkWarningShown = false;
+	let disableBudget = 0;
 
 	const formatRewriteNotice = (originalCommand: string, rewrittenCommand: string): string => {
 		const original = trimMessage(originalCommand, 100);
@@ -138,6 +153,7 @@ export default function rtkIntegrationExtension(pi: ExtensionAPI): void {
 
 	const clearTrackedBashCommands = (): void => {
 		activeBashCommands.clear();
+		disabledToolCallIds.clear();
 	};
 
 	const trackBashCommand = (toolCallId: unknown, args: unknown): void => {
@@ -169,31 +185,6 @@ export default function rtkIntegrationExtension(pi: ExtensionAPI): void {
 		}
 
 		activeBashCommands.delete(toolCallId);
-	};
-
-	const refreshConfig = async (ctx?: ExtensionContext | ExtensionCommandContext): Promise<void> => {
-		const ensured = ensureConfigExists();
-		if (ensured.error && ctx) {
-			warnOnce(ctx, ensured.error);
-		}
-
-		const loaded = loadRtkIntegrationConfig();
-		config = loaded.config;
-		pendingLoadWarning = loaded.warning;
-		await refreshRuntimeStatus();
-
-		if (pendingLoadWarning && ctx) {
-			warnOnce(ctx, pendingLoadWarning);
-			pendingLoadWarning = undefined;
-		}
-	};
-
-	const setConfig = (next: RtkIntegrationConfig, ctx: ExtensionCommandContext): void => {
-		config = normalizeRtkIntegrationConfig(next);
-		const saved = saveRtkIntegrationConfig(config);
-		if (!saved.success && saved.error) {
-			ctx.ui.notify(saved.error, "error");
-		}
 	};
 
 	const refreshRuntimeStatus = async (): Promise<RuntimeStatus> => {
@@ -242,6 +233,31 @@ export default function rtkIntegrationExtension(pi: ExtensionAPI): void {
 		}
 	};
 
+	const refreshConfig = async (ctx?: ExtensionContext | ExtensionCommandContext): Promise<void> => {
+		const ensured = ensureConfigExists();
+		if (ensured.error && ctx) {
+			warnOnce(ctx, ensured.error);
+		}
+
+		const loaded = loadRtkIntegrationConfig();
+		config = loaded.config;
+		pendingLoadWarning = loaded.warning;
+		await refreshRuntimeStatus();
+
+		if (pendingLoadWarning && ctx) {
+			warnOnce(ctx, pendingLoadWarning);
+			pendingLoadWarning = undefined;
+		}
+	};
+
+	const setConfig = (next: RtkIntegrationConfig, ctx: ExtensionCommandContext): void => {
+		config = normalizeRtkIntegrationConfig(next);
+		const saved = saveRtkIntegrationConfig(config);
+		if (!saved.success && saved.error) {
+			ctx.ui.notify(saved.error, "error");
+		}
+	};
+
 	const maybeWarnRtkMissing = (ctx: ExtensionContext): void => {
 		if (!config.enabled || !config.guardWhenRtkMissing) {
 			return;
@@ -258,8 +274,7 @@ export default function rtkIntegrationExtension(pi: ExtensionAPI): void {
 
 		missingRtkWarningShown = true;
 		const reason = runtimeStatus.lastError ? ` (${runtimeStatus.lastError})` : "";
-		const handling = config.mode === "suggest" ? "rewrite suggestions" : "command rewrite";
-		warnOnce(ctx, `${EXTENSION_NAME}: rtk binary unavailable, ${handling} bypassed${reason}.`);
+		warnOnce(ctx, `${EXTENSION_NAME}: rtk binary unavailable, RTK optimization bypassed${reason}.`);
 	};
 
 	const ensureRuntimeStatusFresh = async (): Promise<void> => {
@@ -274,6 +289,31 @@ export default function rtkIntegrationExtension(pi: ExtensionAPI): void {
 		}
 	};
 
+	const getExecutableResolution = (): RtkExecutableResolution | undefined => {
+		if (!runtimeStatus.rtkExecutableCommand) {
+			return undefined;
+		}
+		const resolver: RtkExecutableResolution["resolver"] =
+			runtimeStatus.rtkExecutableResolver === "where" ? "where" : "which";
+		return {
+			command: runtimeStatus.rtkExecutableCommand,
+			resolvedPath: runtimeStatus.rtkExecutablePath,
+			resolver,
+			warning: runtimeStatus.rtkExecutableResolutionWarning,
+		};
+	};
+
+	const consumeDisableBudget = (toolCallId: unknown, toolName: string): boolean => {
+		if (isRtkControlTool(toolName) || disableBudget <= 0) {
+			return false;
+		}
+		disableBudget -= 1;
+		if (typeof toolCallId === "string") {
+			disabledToolCallIds.add(toolCallId);
+		}
+		return true;
+	};
+
 	const controller = {
 		getConfig: () => config,
 		setConfig,
@@ -282,26 +322,78 @@ export default function rtkIntegrationExtension(pi: ExtensionAPI): void {
 		refreshRuntimeStatus,
 		getMetricsSummary: getOutputMetricsSummary,
 		clearMetrics: clearOutputMetrics,
+		getDisableBudget: () => disableBudget,
 	};
 
 	registerRtkIntegrationCommand(pi, controller);
+	registerRtkReadPruneProvider(pi, {
+		getRuntimeStatus: () => runtimeStatus,
+		getExecutableResolution,
+	});
+
+	pi.registerTool({
+		name: "rtk",
+		label: "RTK",
+		description:
+			"Control RTK optimization. RTK optimizes token-heavy shell/search output: local bash may use rtk rewrite, remote bash and builtin grep/find may use local rtk pipe. Disable it before tool calls that need raw, unoptimized output.",
+		promptSnippet: "Control RTK output optimization for raw-output workflows.",
+		promptGuidelines: [
+			"RTK may optimize local bash commands and compact eligible remote bash or grep/find output.",
+			"Use rtk with action=\"disable\" before tool calls that require raw, unoptimized output; use action=\"enable\" to clear the disable budget early.",
+		],
+		parameters: Type.Object({
+			action: StringEnum(["disable", "enable"] as const),
+			n: Type.Optional(Type.Number({ minimum: 1, maximum: RTK_CONTROL_MAX_BUDGET })),
+		}),
+		async execute(_toolCallId, params: { action: "disable" | "enable"; n?: number }) {
+			if (params.action === "enable") {
+				const previousBudget = disableBudget;
+				disableBudget = 0;
+				return {
+					content: [{ type: "text" as const, text: `RTK optimization re-enabled. Cleared disable budget: ${previousBudget}.` }],
+					details: { previousBudget, disableBudget },
+				};
+			}
+
+			const nextBudget = normalizeDisableCount(params.n);
+			if (nextBudget === undefined) {
+				return {
+					content: [{ type: "text" as const, text: `Provide n from 1 to ${RTK_CONTROL_MAX_BUDGET} for action=\"disable\".` }],
+					isError: true,
+					details: { disableBudget },
+				};
+			}
+
+			disableBudget = nextBudget;
+			const inactive = runtimeStatus.rtkAvailable ? "" : " RTK binary is currently unavailable, so optimization is already inactive.";
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: `RTK optimization disabled for the next ${nextBudget} tool call(s).${inactive}`,
+					},
+				],
+				details: { disableBudget, rtkAvailable: runtimeStatus.rtkAvailable },
+			};
+		},
+	});
 
 	pi.on("session_start", async (_event, ctx) => {
 		warnedMessages.reset();
 		suggestionNotices.reset();
 		clearTrackedBashCommands();
 		missingRtkWarningShown = false;
+		disableBudget = 0;
 		await refreshConfig(ctx);
 		maybeWarnRtkMissing(ctx);
 	});
-
 
 	pi.on("agent_end", async () => {
 		clearTrackedBashCommands();
 	});
 
 	pi.on("tool_execution_start", async (event) => {
-		if (!config.enabled || !config.outputCompaction.enabled) {
+		if (!config.enabled) {
 			return;
 		}
 
@@ -314,7 +406,7 @@ export default function rtkIntegrationExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("tool_execution_update", async (event) => {
-		if (!config.enabled || !config.outputCompaction.enabled) {
+		if (!config.enabled) {
 			return;
 		}
 
@@ -340,7 +432,7 @@ export default function rtkIntegrationExtension(pi: ExtensionAPI): void {
 		}
 
 		try {
-			if (config.enabled && config.outputCompaction.enabled) {
+			if (config.enabled) {
 				const sanitization = sanitizeStreamingBashExecutionResult(
 					eventRecord.result,
 					getTrackedBashCommand(eventRecord.toolCallId),
@@ -354,25 +446,15 @@ export default function rtkIntegrationExtension(pi: ExtensionAPI): void {
 		}
 	});
 
-	pi.on("before_agent_start", async (event, ctx) => {
+	pi.on("before_agent_start", async (_event, ctx) => {
 		await ensureRuntimeStatusFresh();
 		maybeWarnRtkMissing(ctx);
-
-		if (!shouldInjectSourceFilterTroubleshootingNote(config)) {
-			return {};
-		}
-
-		if (event.systemPrompt.includes(SOURCE_FILTER_TROUBLESHOOTING_NOTE)) {
-			return {};
-		}
-
-		return {
-			systemPrompt: `${event.systemPrompt}\n\n${SOURCE_FILTER_TROUBLESHOOTING_NOTE}`,
-		};
+		return {};
 	});
 
 	pi.on("tool_call", async (event, ctx) => {
-		if (!config.enabled) {
+		const disabled = consumeDisableBudget(event.toolCallId, event.toolName);
+		if (!config.enabled || disabled) {
 			return {};
 		}
 
@@ -380,7 +462,11 @@ export default function rtkIntegrationExtension(pi: ExtensionAPI): void {
 			return {};
 		}
 
-		if (config.mode === "rewrite") {
+		if (hasRemoteSession(event.input)) {
+			return {};
+		}
+
+		if (config.localBashRewrite.mode === "rewrite") {
 			const compatibility = applyWindowsBashCompatibilityFixes(event.input.command);
 			if (compatibility.command !== event.input.command) {
 				event.input.command = compatibility.command;
@@ -392,18 +478,9 @@ export default function rtkIntegrationExtension(pi: ExtensionAPI): void {
 			return {};
 		}
 
-		let executableResolution: RtkExecutableResolution | undefined;
-		if (runtimeStatus.rtkExecutableCommand) {
-			const resolver: RtkExecutableResolution["resolver"] =
-				runtimeStatus.rtkExecutableResolver === "where" ? "where" : "which";
-			executableResolution = {
-				command: runtimeStatus.rtkExecutableCommand,
-				resolvedPath: runtimeStatus.rtkExecutablePath,
-				resolver,
-				warning: runtimeStatus.rtkExecutableResolutionWarning,
-			};
-		}
-		const decision = await computeRewriteDecision(event.input.command, config, pi, { executableResolution });
+		const decision = await computeRewriteDecision(event.input.command, config, pi, {
+			executableResolution: getExecutableResolution(),
+		});
 		if (!decision.changed) {
 			if (decision.warning) {
 				warnOnce(ctx, formatRewriteWarning(decision.originalCommand, decision.warning));
@@ -411,16 +488,17 @@ export default function rtkIntegrationExtension(pi: ExtensionAPI): void {
 			return {};
 		}
 
-		if (config.mode === "rewrite") {
-			if (config.showRewriteNotifications && ctx.hasUI) {
+		if (config.localBashRewrite.mode === "rewrite") {
+			if (config.localBashRewrite.showNotifications && ctx.hasUI) {
 				ctx.ui.notify(formatRewriteNotice(decision.originalCommand, decision.rewrittenCommand), "info");
 			}
 			const envScopedRewrittenCommand = applyRtkCommandEnvironment(decision.rewrittenCommand);
 			event.input.command = applyRewrittenCommandShellSafetyFixups(envScopedRewrittenCommand);
+			trackRtkActivity({ kind: "rewrite", tool: "bash", command: decision.originalCommand });
 			return {};
 		}
 
-		if (config.mode === "suggest") {
+		if (config.localBashRewrite.mode === "suggest") {
 			const suggestionKey = `${decision.originalCommand}:${decision.rewrittenCommand}`;
 			if (suggestionNotices.remember(suggestionKey) && ctx.hasUI) {
 				ctx.ui.notify(`RTK suggestion: ${decision.rewrittenCommand}`, "info");
@@ -431,18 +509,25 @@ export default function rtkIntegrationExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("tool_result", async (event, ctx) => {
-		if (!config.enabled || !config.outputCompaction.enabled) {
+		const disabled = disabledToolCallIds.delete(event.toolCallId);
+		if (!config.enabled || disabled) {
+			return {};
+		}
+
+		await ensureRuntimeStatusFresh();
+		if (shouldSkipCommandHandlingWhenRtkMissing(config, runtimeStatus)) {
 			return {};
 		}
 
 		try {
-			const outcome = compactToolResult(
+			const outcome = await compactToolResult(
 				{
 					toolName: event.toolName,
 					input: event.input,
 					content: event.content,
 				},
 				config,
+				{ pi, executableResolution: getExecutableResolution() },
 			);
 
 			if (!outcome.changed || !outcome.content) {
@@ -455,7 +540,7 @@ export default function rtkIntegrationExtension(pi: ExtensionAPI): void {
 			};
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			warnOnce(ctx, `${EXTENSION_NAME}: output compaction failed, using raw output (${trimMessage(message)}).`);
+			warnOnce(ctx, `${EXTENSION_NAME}: RTK pipe compaction failed, using raw output (${trimMessage(message)}).`);
 			return {};
 		}
 	});

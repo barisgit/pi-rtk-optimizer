@@ -37,9 +37,10 @@ _Avoid_: Eligible-only counter, hidden eligibility counter
 - **RTK Optimization** applies only to **Eligible Tool Calls**.
 - Heuristic/non-RTK compaction techniques and their config flags are removed from the active product surface, not kept as fallback.
 - Configuration names the three RTK paths explicitly: `localBashRewrite`, `remoteBashPipeCompaction`, and `builtinPipeCompaction`.
-- Defaults enable local bash rewrite mode, remote bash pipe compaction, and builtin pipe compaction for `grep` and `find`.
+- Defaults enable local bash rewrite mode and remote bash pipe compaction; builtin pipe compaction is available but default-off for `grep` and `find`.
 - Suggest mode exists only for local bash rewrite; pipe compaction has no suggest mode.
-- Builtin `grep` and `find` outputs use direct tool-name pipe filters: `grep` maps to `rtk pipe -f grep`, and `find` maps to `rtk pipe -f find`.
+- Builtin pipe compaction is disabled by default because Pi builtin tools already apply limits and structured formatting.
+- When explicitly enabled, builtin `grep` and `find` outputs use direct tool-name pipe filters: `grep` maps to `rtk pipe -f grep`, and `find` maps to `rtk pipe -f find`.
 - `builtinPipeCompaction.tools` can only enable implemented builtin filters; unknown/unimplemented tool names are rejected in validation/settings UI or ignored with a `/rtk` warning when hand-edited, rather than creating dynamic behavior.
 - Builtin `ls` is not optimized in v1 because current RTK has no `ls` pipe filter.
 - Builtin `read` remains untouched unless explicitly revisited.

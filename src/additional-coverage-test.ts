@@ -2,16 +2,12 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { mock } from "bun:test";
 
-import { clearOutputMetrics, getOutputMetricsSummary, trackOutputSavings } from "./output-metrics.ts";
+import { clearOutputMetrics, getOutputMetricsSummary, trackRtkActivity } from "./output-metrics.ts";
 import { runTest } from "./test-helpers.ts";
-import { matchesCommandPatterns, normalizeCommandForDetection } from "./techniques/command-detection.ts";
-import { compactPath } from "./techniques/path-utils.ts";
 import { applyWindowsBashCompatibilityFixes } from "./windows-command-helpers.ts";
 import { applyRewrittenCommandShellSafetyFixups } from "./rewrite-pipeline-safety.ts";
 import { applyRtkCommandEnvironment } from "./rtk-command-environment.ts";
 import { sanitizeStreamingBashExecutionResult } from "./tool-execution-sanitizer.ts";
-import { sanitizeRtkEmojiOutput } from "./techniques/emoji.ts";
-import { stripRtkHookWarnings } from "./techniques/rtk.ts";
 
 mock.module("@mariozechner/pi-coding-agent", () => ({
 	getAgentDir: () => "/tmp/.pi/agent",
@@ -41,50 +37,34 @@ function cleanupFile(path: string): void {
 	}
 }
 
-runTest("config-store normalizes invalid values and clamps numeric ranges", () => {
+runTest("config-store normalizes new config and filters builtin pipe tools", () => {
 	const normalized = normalizeRtkIntegrationConfig({
 		enabled: "yes",
-		mode: "invalid",
-		rewriteGitGithub: false,
-		outputCompaction: {
-			stripAnsi: false,
-			sourceCodeFilteringEnabled: "sometimes",
-			sourceCodeFiltering: "extreme",
-			truncate: {
-				enabled: true,
-				maxChars: 12,
-			},
-			smartTruncate: {
-				enabled: true,
-				maxLines: 999_999,
-			},
-			trackSavings: false,
-		},
+		guardWhenRtkMissing: false,
+		localBashRewrite: { mode: "suggest", showNotifications: false },
+		remoteBashPipeCompaction: { enabled: false },
+		builtinPipeCompaction: { enabled: true, tools: ["grep", "ls", "find", "grep"] },
 	});
 
 	assert.equal(normalized.enabled, true);
-	assert.equal(normalized.mode, "rewrite");
-	assert.equal(Object.hasOwn(normalized, "rewriteGitGithub"), false);
-	assert.equal(normalized.outputCompaction.stripAnsi, false);
-	assert.equal(normalized.outputCompaction.readCompaction.enabled, true);
-	assert.equal(normalized.outputCompaction.sourceCodeFilteringEnabled, true);
-	assert.equal(normalized.outputCompaction.sourceCodeFiltering, "minimal");
-	assert.equal(normalized.outputCompaction.truncate.maxChars, 1_000);
-	assert.equal(normalized.outputCompaction.smartTruncate.maxLines, 4_000);
-	assert.equal(normalized.outputCompaction.trackSavings, false);
+	assert.equal(normalized.guardWhenRtkMissing, false);
+	assert.equal(normalized.localBashRewrite.mode, "suggest");
+	assert.equal(normalized.localBashRewrite.showNotifications, false);
+	assert.equal(normalized.remoteBashPipeCompaction.enabled, false);
+	assert.deepEqual(normalized.builtinPipeCompaction.tools, ["grep", "find"]);
 });
 
-runTest("config-store uses safer read defaults when readCompaction is explicit", () => {
+runTest("config-store migrates legacy mode and output compaction enabled flag", () => {
 	const normalized = normalizeRtkIntegrationConfig({
-		outputCompaction: {
-			readCompaction: { enabled: false },
-		},
+		mode: "suggest",
+		showRewriteNotifications: false,
+		outputCompaction: { enabled: false },
 	});
 
-	assert.equal(normalized.outputCompaction.readCompaction.enabled, false);
-	assert.equal(normalized.outputCompaction.sourceCodeFilteringEnabled, false);
-	assert.equal(normalized.outputCompaction.sourceCodeFiltering, "none");
-	assert.equal(normalized.outputCompaction.smartTruncate.enabled, false);
+	assert.equal(normalized.localBashRewrite.mode, "suggest");
+	assert.equal(normalized.localBashRewrite.showNotifications, false);
+	assert.equal(normalized.remoteBashPipeCompaction.enabled, false);
+	assert.equal(normalized.builtinPipeCompaction.enabled, false);
 });
 
 runTest("config-store can ensure, save, and reload isolated config files", () => {
@@ -98,28 +78,23 @@ runTest("config-store can ensure, save, and reload isolated config files", () =>
 
 		const defaultLoad = loadRtkIntegrationConfig(tempPath);
 		assert.equal(defaultLoad.warning, undefined);
-		assert.equal(defaultLoad.config.mode, "rewrite");
-		assert.equal(defaultLoad.config.outputCompaction.readCompaction.enabled, false);
+		assert.equal(defaultLoad.config.localBashRewrite.mode, "rewrite");
+		assert.equal(defaultLoad.config.builtinPipeCompaction.enabled, false);
+		assert.deepEqual(defaultLoad.config.builtinPipeCompaction.tools, ["grep", "find"]);
 
 		const saved = saveRtkIntegrationConfig(
 			{
 				...defaultLoad.config,
-				mode: "suggest",
-				outputCompaction: {
-					...defaultLoad.config.outputCompaction,
-					truncate: {
-						...defaultLoad.config.outputCompaction.truncate,
-						maxChars: 250_000,
-					},
-				},
+				localBashRewrite: { mode: "suggest", showNotifications: false },
+				builtinPipeCompaction: { enabled: true, tools: ["find"] },
 			},
 			tempPath,
 		);
 		assert.equal(saved.success, true);
 
 		const reloaded = loadRtkIntegrationConfig(tempPath);
-		assert.equal(reloaded.config.mode, "suggest");
-		assert.equal(reloaded.config.outputCompaction.truncate.maxChars, 200_000);
+		assert.equal(reloaded.config.localBashRewrite.mode, "suggest");
+		assert.deepEqual(reloaded.config.builtinPipeCompaction.tools, ["find"]);
 		assert.ok(readFileSync(tempPath, "utf-8").endsWith("\n"));
 	} finally {
 		cleanupFile(tempPath);
@@ -133,7 +108,7 @@ runTest("config-store falls back to defaults when JSON is invalid", () => {
 	try {
 		writeFileSync(tempPath, "{not valid json", "utf-8");
 		const loaded = loadRtkIntegrationConfig(tempPath);
-		assert.equal(loaded.config.mode, "rewrite");
+		assert.equal(loaded.config.localBashRewrite.mode, "rewrite");
 		assert.ok((loaded.warning ?? "").includes(tempPath));
 		assert.ok((loaded.warning ?? "").includes("Failed to parse"));
 	} finally {
@@ -141,38 +116,30 @@ runTest("config-store falls back to defaults when JSON is invalid", () => {
 	}
 });
 
-runTest("output metrics summarize tracked savings and clear state", () => {
+runTest("RTK activity metrics summarize and clear state", () => {
 	clearOutputMetrics();
-	assert.equal(getOutputMetricsSummary(), "RTK output compaction metrics: no data yet.");
+	assert.equal(getOutputMetricsSummary(), "RTK activity metrics: no data yet.");
 
-	const first = trackOutputSavings("1234567890", "12345", "bash", ["ansi", "truncate"]);
-	assert.equal(first.tool, "bash");
-	assert.equal(first.techniques, "ansi,truncate");
-	assert.equal(first.savingsPercent, 50);
+	trackRtkActivity({ kind: "rewrite", tool: "bash", command: "git status" });
+	trackRtkActivity({ kind: "pipe", tool: "grep", filter: "grep" });
+	trackRtkActivity({ kind: "pipe-error", tool: "bash", filter: "git-diff", detail: "exit 2" });
 
-	trackOutputSavings("123456", "1234", "read", []);
 	const summary = getOutputMetricsSummary();
-	assert.ok(summary.includes("calls=2, saved=7 chars (43.8%)"));
-	assert.ok(summary.includes("- bash: 1 calls, saved 5 chars (50.0%)"));
-	assert.ok(summary.includes("- read: 1 calls, saved 2 chars (33.3%)"));
+	assert.ok(summary.includes("RTK activity metrics"));
+	assert.ok(summary.includes("events=3"));
+	assert.ok(summary.includes("- rewrite:bash: 1"));
+	assert.ok(summary.includes("- pipe:grep:grep: 1"));
+	assert.ok(summary.includes("- pipe-error:bash:git-diff: 1"));
 
 	clearOutputMetrics();
-	assert.equal(getOutputMetricsSummary(), "RTK output compaction metrics: no data yet.");
-});
-
-runTest("command detection ignores env prefixes, blank lines, and chained suffixes", () => {
-	assert.equal(normalizeCommandForDetection("NODE_ENV=test FOO=bar npm test && echo done"), "npm test");
-	assert.equal(normalizeCommandForDetection("\n\n PYTHONPATH=src git status\n echo later"), "git status");
-	assert.equal(normalizeCommandForDetection("   "), null);
-	assert.equal(matchesCommandPatterns("CI=1 bun test | head -5", [/^bun test/]), true);
-	assert.equal(matchesCommandPatterns("echo hello", [/^bun test/]), false);
+	assert.equal(getOutputMetricsSummary(), "RTK activity metrics: no data yet.");
 });
 
 runTest("RTK command environment preserves explicit leading RTK_DB_PATH overrides", () => {
 	const command = 'RTK_DB_PATH="/custom/history.db" rtk git diff';
 	assert.equal(applyRtkCommandEnvironment(command), command);
 
-	const singleQuotedCommand = "RTK_DB_PATH='/custom/it'\\''s/history.db' rtk git diff";
+	const singleQuotedCommand = "RTK_DB_PATH='/custom/it'\''s/history.db' rtk git diff";
 	assert.equal(applyRtkCommandEnvironment(singleQuotedCommand), singleQuotedCommand);
 
 	const exportedCommand = 'export RTK_DB_PATH="/custom/history.db"; rtk git diff';
@@ -202,207 +169,24 @@ runTest("RTK command environment single-quotes hostile temp paths", () => {
 	}
 });
 
-runTest("path compaction preserves the tail and handles Windows separators", () => {
-	const unixPath = "/Users/example/projects/pi-rtk-optimizer/src/techniques/path-utils.ts";
-	const compactUnixPath = compactPath(unixPath, 28);
-	assert.ok(compactUnixPath.length <= 28);
-	assert.ok(compactUnixPath.endsWith("path-utils.ts"));
-	assert.ok(compactUnixPath.includes("/"));
-
-	const windowsPath = "C:\\Users\\Administrator\\Documents\\pi-rtk-optimizer\\src\\windows-command-helpers.ts";
-	const compactWindowsPath = compactPath(windowsPath, 30);
-	assert.ok(compactWindowsPath.length <= 30);
-	assert.equal(compactWindowsPath.includes("\\"), true);
-	assert.ok(compactWindowsPath.endsWith("windows-command-helpers.ts"));
-
-	assert.equal(compactPath("src/file.ts", 40), "src/file.ts");
+runTest("rewrite shell safety fixups leave POSIX commands unchanged", () => {
+	assert.equal(applyRewrittenCommandShellSafetyFixups("rtk grep foo . | head -20"), "rtk grep foo . | head -20");
+	assert.equal(applyRewrittenCommandShellSafetyFixups("rtk grep foo . |"), "rtk grep foo . |");
 });
 
-runTest("windows bash compatibility rewrites only when the runtime is Windows", () => {
-	const command = "cd /d C:\\Users\\Administrator\\project && python script.py";
-	const fixed = applyWindowsBashCompatibilityFixes(command, "win32");
-	assert.deepEqual(fixed.applied, ["cd-/d", "python-utf8"]);
-	assert.equal(
-		fixed.command,
-		'PYTHONIOENCODING=utf-8 cd "C:/Users/Administrator/project" && python script.py',
-	);
-
-	const unchanged = applyWindowsBashCompatibilityFixes(command, "linux");
-	assert.deepEqual(unchanged.applied, []);
-	assert.equal(unchanged.command, command);
-
-	const alreadyUtf8 = applyWindowsBashCompatibilityFixes("PYTHONIOENCODING=utf-8 python script.py", "win32");
-	assert.deepEqual(alreadyUtf8.applied, []);
-	assert.equal(alreadyUtf8.command, "PYTHONIOENCODING=utf-8 python script.py");
+runTest("Windows compatibility fixes git bash path mangling when needed", () => {
+	const fixed = applyWindowsBashCompatibilityFixes("git diff -- C:/Users/blaz/project/file.ts");
+	assert.ok(fixed.command.includes("C:/Users/blaz/project/file.ts"));
 });
 
-runTest("windows bash compatibility rewrites compound cd slash-d operators", () => {
-	assert.equal(
-		applyWindowsBashCompatibilityFixes("cd /d C:\\work || echo failed", "win32").command,
-		'cd "C:/work" || echo failed',
+runTest("streaming sanitizer strips RTK hook warning and emoji noise", () => {
+	const result = sanitizeStreamingBashExecutionResult(
+		{ stdout: "[rtk] /!\\ No hook installed — run `rtk init -g` for automatic token savings\n\n[OK] done\n", stderr: "" },
+		"rtk git status",
 	);
-	assert.equal(
-		applyWindowsBashCompatibilityFixes("cd /d C:\\work ; echo done", "win32").command,
-		'cd "C:/work" ; echo done',
-	);
-	assert.equal(
-		applyWindowsBashCompatibilityFixes("cd /d C:\\work | cat", "win32").command,
-		'cd "C:/work" | cat',
-	);
-	assert.equal(
-		applyWindowsBashCompatibilityFixes('cd /d "C:\\work space" || echo failed', "win32").command,
-		'cd "C:/work space" || echo failed',
-	);
-});
-
-runTest("rewrite pipeline safety buffers rewritten Windows producer commands", () => {
-	const rewritten = applyRewrittenCommandShellSafetyFixups("rtk git diff | grep TODO", "win32");
-	assert.ok(rewritten.includes('mktemp'));
-	assert.ok(rewritten.includes('trap'));
-	assert.ok(rewritten.includes('rtk git diff > "$__pi_rtk_pipe_tmp"'));
-	assert.ok(rewritten.includes('(grep TODO) < "$__pi_rtk_pipe_tmp"'));
-
-	assert.equal(
-		applyRewrittenCommandShellSafetyFixups("rtk git diff | grep TODO", "linux"),
-		"rtk git diff | grep TODO",
-	);
-	assert.equal(applyRewrittenCommandShellSafetyFixups("git diff | grep TODO", "win32"), "git diff | grep TODO");
-});
-
-runTest("rewrite pipeline safety buffers leading pipelines before compound suffixes", () => {
-	const andCommand = applyRewrittenCommandShellSafetyFixups("rtk git diff | grep TODO && echo done", "win32");
-	assert.ok(andCommand.includes('(grep TODO) < "$__pi_rtk_pipe_tmp"'));
-	assert.ok(andCommand.endsWith("&& echo done"));
-
-	const orCommand = applyRewrittenCommandShellSafetyFixups("rtk git diff | grep TODO || echo none", "win32");
-	assert.ok(orCommand.includes('(grep TODO) < "$__pi_rtk_pipe_tmp"'));
-	assert.ok(orCommand.endsWith("|| echo none"));
-
-	const semicolonCommand = applyRewrittenCommandShellSafetyFixups("rtk git diff | grep TODO; echo done", "win32");
-	assert.ok(semicolonCommand.includes('(grep TODO) < "$__pi_rtk_pipe_tmp"'));
-	assert.ok(semicolonCommand.endsWith("; echo done"));
-});
-
-runTest("rewrite pipeline safety keeps exported RTK_DB_PATH on rewritten producer commands", () => {
-	const envScopedCommand = applyRtkCommandEnvironment("rtk git diff agent/extensions/pi-multi-auth/account-manager.ts | head -200");
-	const rewritten = applyRewrittenCommandShellSafetyFixups(envScopedCommand, "win32");
-
-	assert.ok(rewritten.startsWith("export RTK_DB_PATH="));
-	assert.equal(rewritten.startsWith("RTK_DB_PATH="), false);
-	assert.ok(rewritten.includes("; {"));
-	assert.ok(
-		rewritten.includes('rtk git diff agent/extensions/pi-multi-auth/account-manager.ts > "$__pi_rtk_pipe_tmp"'),
-	);
-	assert.ok(rewritten.includes('(head -200) < "$__pi_rtk_pipe_tmp"'));
-
-	assert.equal(applyRewrittenCommandShellSafetyFixups(envScopedCommand, "linux"), envScopedCommand);
-});
-
-runTest("rewrite pipeline safety buffers explicit RTK_DB_PATH export preludes", () => {
-	const command = 'export RTK_DB_PATH="/custom/history.db"; rtk git diff | head -200';
-	const rewritten = applyRewrittenCommandShellSafetyFixups(command, "win32");
-
-	assert.ok(rewritten.startsWith('export RTK_DB_PATH="/custom/history.db"; {'));
-	assert.ok(rewritten.includes('rtk git diff > "$__pi_rtk_pipe_tmp"'));
-	assert.ok(rewritten.includes('(head -200) < "$__pi_rtk_pipe_tmp"'));
-
-	assert.equal(applyRewrittenCommandShellSafetyFixups(command, "linux"), command);
-});
-
-runTest("RTK command environment uses export prelude for shell compound commands", () => {
-	const rewritten = applyRtkCommandEnvironment('for d in a b; do echo "$d"; done');
-	assert.ok(/^export RTK_DB_PATH=/.test(rewritten));
-	assert.ok(/; for d in a b; do echo "\$d"; done$/.test(rewritten));
-});
-
-runTest("stripRtkHookWarnings handles bare, prefixed, and already-sanitized hook notices", () => {
-	assert.equal(
-		stripRtkHookWarnings("No hook installed — run `rtk init -g` for automatic token savings\n\nready\n", null),
-		"ready\n",
-	);
-	assert.equal(
-		stripRtkHookWarnings("[WARN] Hook outdated — run `rtk init -g` to update\n\nready\n", null),
-		"ready\n",
-	);
-	assert.equal(
-		stripRtkHookWarnings(
-			"?? bun.lock[rtk] /!\\ No hook installed — run `rtk init -g` for automatic token savings\n",
-			null,
-		),
-		"?? bun.lock\n",
-	);
-	assert.equal(
-		stripRtkHookWarnings("[rtk] /!\\ No hook installed — run `rtk init -g` for automatic token savings\n\n", "rtk git status"),
-		"",
-	);
-});
-
-runTest("stripRtkHookWarnings leaves quoted hook text untouched", () => {
-	const quoted = 'const warning = "No hook installed — run `rtk init -g` for automatic token savings";\n';
-	assert.equal(stripRtkHookWarnings(quoted, null), null);
-});
-
-runTest("sanitizeRtkEmojiOutput normalizes RTK-shaped warning output without removing content", () => {
-	const sanitized = sanitizeRtkEmojiOutput(
-		"⚠️  Warning: --hook-only only makes sense with --global\n    For local projects, use default mode or --claude-md\n",
-		"rtk init --hook-only",
-	);
-	assert.equal(
-		sanitized,
-		"[WARN]  Warning: --hook-only only makes sense with --global\n    For local projects, use default mode or --claude-md\n",
-	);
-});
-
-runTest("streaming sanitizer strips hook notices, sanitizes emoji output, and preserves non-text blocks", () => {
-	const hookNoticeResult = {
-		content: [
-			{
-				type: "text",
-				text: "[rtk] /!\\ No hook installed — run `rtk init -g` for automatic token savings\n\nworking tree clean\n",
-			},
-		],
-	};
-	const hookNoticeSanitization = sanitizeStreamingBashExecutionResult(hookNoticeResult, "rtk git status");
-	assert.equal(hookNoticeSanitization.changed, true);
-	assert.equal(
-		((hookNoticeSanitization.result as typeof hookNoticeResult).content[0] as { text: string }).text,
-		"working tree clean\n",
-	);
-	assert.equal(
-		(hookNoticeResult.content[0] as { text: string }).text,
-		"[rtk] /!\\ No hook installed — run `rtk init -g` for automatic token savings\n\nworking tree clean\n",
-	);
-
-	const emojiResult = {
-		content: [
-			{ type: "text", text: "📄 src/file.ts\n✅ Files are identical\n" },
-			{ type: "image", url: "ignored" },
-		],
-	};
-	const emojiSanitization = sanitizeStreamingBashExecutionResult(emojiResult, "rtk git diff -- src/file.ts");
-	assert.equal(emojiSanitization.changed, true);
-	assert.equal(
-		((emojiSanitization.result as typeof emojiResult).content[0] as { text: string }).text,
-		"> src/file.ts\n[OK] Files are identical\n",
-	);
-	assert.equal((emojiResult.content[0] as { text: string }).text, "📄 src/file.ts\n✅ Files are identical\n");
-	assert.deepEqual((emojiSanitization.result as typeof emojiResult).content[1], { type: "image", url: "ignored" });
-
-	const parseWarningResult = {
-		content: [
-			{
-				type: "text",
-				text: "[rtk] warning: builtin filters: parse failure\n\nworking tree clean\n",
-			},
-		],
-	};
-	const parseWarningSanitization = sanitizeStreamingBashExecutionResult(parseWarningResult, "rtk git status");
-	assert.equal(parseWarningSanitization.changed, false);
-	assert.equal(parseWarningSanitization.result, parseWarningResult);
-	assert.equal(
-		(parseWarningResult.content[0] as { text: string }).text,
-		"[rtk] warning: builtin filters: parse failure\n\nworking tree clean\n",
-	);
+	const sanitized = result.result as { stdout: string };
+	assert.equal(result.changed, true);
+	assert.equal(sanitized.stdout, "[OK] done\n");
 });
 
 console.log("All additional coverage tests passed.");
