@@ -6,16 +6,13 @@ function isPromiseLike(value: TestResult): value is Promise<void> {
 	return Boolean(value && typeof (value as Promise<void>).then === "function");
 }
 
-export function runTest(name: string, testFn: () => TestResult): TestResult {
+export function runTest(_name: string, testFn: () => TestResult): TestResult {
 	const result = testFn();
 	if (!isPromiseLike(result)) {
-		console.log(`[PASS] ${name}`);
 		return;
 	}
 
-	return result.then(() => {
-		console.log(`[PASS] ${name}`);
-	});
+	return result.then(() => {});
 }
 
 export function cloneDefaultConfig(): RtkIntegrationConfig {
