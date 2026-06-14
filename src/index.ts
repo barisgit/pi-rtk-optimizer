@@ -27,7 +27,9 @@ export type RtkExtensionAPI = Pick<ExtensionAPI, "exec" | "on" | "registerComman
 	events: { emit(event: string, payload: unknown): void };
 };
 
+const RTK_CONTROL_MIN_BUDGET = 1;
 const RTK_CONTROL_MAX_BUDGET = 20;
+const RTK_CONTROL_DEFAULT_BUDGET = 1;
 
 function trimMessage(raw: string, maxLength = 220): string {
 	const clean = raw.replace(/\s+/g, " ").trim();
@@ -107,7 +109,7 @@ function normalizeDisableCount(raw: number | undefined): number | undefined {
 		return undefined;
 	}
 	const rounded = Math.floor(raw);
-	if (rounded < 1 || rounded > RTK_CONTROL_MAX_BUDGET) {
+	if (rounded < RTK_CONTROL_MIN_BUDGET || rounded > RTK_CONTROL_MAX_BUDGET) {
 		return undefined;
 	}
 	return rounded;
@@ -334,8 +336,7 @@ export default function rtkIntegrationExtension(pi: RtkExtensionAPI): void {
 	pi.registerTool({
 		name: "rtk",
 		label: "RTK",
-		description:
-			"Control RTK optimization. RTK optimizes token-heavy shell/search output: local bash may use rtk rewrite, remote bash and builtin grep/find may use local rtk pipe. Disable it before tool calls that need raw, unoptimized output.",
+		description: `Control RTK optimization. RTK optimizes token-heavy shell/search output: local bash may use rtk rewrite, remote bash and builtin grep/find may use local rtk pipe. Disable it before tool calls that need raw, unoptimized output. action="disable" skips optimization for the next n tool calls (n is ${RTK_CONTROL_MIN_BUDGET}-${RTK_CONTROL_MAX_BUDGET}, defaults to ${RTK_CONTROL_DEFAULT_BUDGET} when omitted); action="enable" clears the remaining budget early.`,
 		promptSnippet: "Control RTK output optimization for raw-output workflows.",
 		promptGuidelines: [
 			"RTK may optimize local bash commands and compact eligible remote bash or grep/find output.",
@@ -343,7 +344,7 @@ export default function rtkIntegrationExtension(pi: RtkExtensionAPI): void {
 		],
 		parameters: Type.Object({
 			action: StringEnum(["disable", "enable"] as const),
-			n: Type.Optional(Type.Number({ minimum: 1, maximum: RTK_CONTROL_MAX_BUDGET })),
+			n: Type.Optional(Type.Number({ minimum: RTK_CONTROL_MIN_BUDGET, maximum: RTK_CONTROL_MAX_BUDGET })),
 		}),
 		async execute(_toolCallId, params: { action: "disable" | "enable"; n?: number }) {
 			if (params.action === "enable") {
@@ -355,10 +356,11 @@ export default function rtkIntegrationExtension(pi: RtkExtensionAPI): void {
 				};
 			}
 
-			const nextBudget = normalizeDisableCount(params.n);
+			const nextBudget =
+				params.n === undefined ? RTK_CONTROL_DEFAULT_BUDGET : normalizeDisableCount(params.n);
 			if (nextBudget === undefined) {
 				return {
-					content: [{ type: "text" as const, text: `Provide n from 1 to ${RTK_CONTROL_MAX_BUDGET} for action=\"disable\".` }],
+					content: [{ type: "text" as const, text: `Provide n from ${RTK_CONTROL_MIN_BUDGET} to ${RTK_CONTROL_MAX_BUDGET} for action=\"disable\".` }],
 					isError: true,
 					details: { disableBudget },
 				};

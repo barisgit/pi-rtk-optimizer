@@ -201,6 +201,19 @@ await runTest("session_start refreshes RTK provenance and runtime guard skips mi
 	assert.ok(harness.execCalls.some((call) => call.command === "/opt/rtk/bin/rtk" && call.args[0] === "rewrite"));
 });
 
+await runTest("disable without n defaults to 1 instead of erroring", async () => {
+	const harness = createHarness();
+	await call(harness.handlers.session_start, {}, harness.ctx);
+	const tool = harness.registeredTool;
+	if (!tool) {
+		throw new Error("Expected rtk tool to be registered");
+	}
+
+	const disabled = await tool.execute("rtk-default", { action: "disable" }, undefined, undefined, harness.ctx);
+	assert.equal(disabled.isError, undefined);
+	assert.ok(firstText(disabled.content).includes("next 1 tool call"));
+});
+
 await runTest("registered rtk tool controls disable budget without consuming itself", async () => {
 	const harness = createHarness();
 	await call(harness.handlers.session_start, {}, harness.ctx);

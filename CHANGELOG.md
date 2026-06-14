@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `rtk` tool no longer errors when `action="disable"` is called without `n`; it now defaults to disabling the next call. Eliminates the guaranteed two-step disable round-trip.
+- `rtk` tool description, parameter schema, validator, and error message now derive their min/max/default bounds from shared constants (`RTK_CONTROL_MIN_BUDGET`, `RTK_CONTROL_MAX_BUDGET`, `RTK_CONTROL_DEFAULT_BUDGET`) instead of hardcoded values.
+
 ## [0.7.1] - 2026-05-04
 
 ### Changed
